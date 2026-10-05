@@ -79,16 +79,24 @@ Delta operations use JSON Patch format (RFC 6902): `add`, `remove`, `replace`, `
 
 ## Why net.createServer Instead of Express
 
-Node's llhttp parser rejects unknown HTTP methods at the TCP parsing layer before any Express middleware runs. This means you cannot add SYNC support via `app.use()` or any Express hook — the request never reaches Express in the first place.
+Node's llhttp parser rejects unknown HTTP methods at the TCP parsing layer before any Express middleware can run. You cannot add SYNC support via `app.use()` or any Express hook — the connection is dropped before it reaches Express. The solution is `net.createServer` to intercept the raw TCP stream, read the first line to detect the method, handle SYNC directly at byte level, and proxy all other methods to an internal Express HTTP server. This is not a workaround — it is the correct architectural layer for method-level protocol extension.
 
-The only correct solution is to intercept the raw TCP stream with `net.createServer`, read the first line to detect the method, handle SYNC requests directly at the byte level, and proxy everything else to an internal Express HTTP server. This is not a workaround — it's the correct architectural layer for method-level protocol extension. Any new HTTP method that doesn't appear in the HTTP/1.1 RFC must be introduced at this layer.
+## What SYNC Is Not
+
+- **Not WebSockets** — no persistent connection; SYNC is pure request-response, fully REST-compatible
+- **Not SSE** — client-initiated pull, not server-push; the client decides when to synchronize
+- **Not RFC 3229** — the client declares its version vector; the server does not choose the diff baseline
+- **Not a header on GET** — SYNC is a first-class method with its own semantics, not a modifier on an existing method
+- **Not a replacement for GET/POST** — additive to HTTP, not a substitution; GET and SYNC coexist on the same endpoint
 
 ## Status
 
-- Reference implementation: complete
+- Reference implementation: complete (Node.js)
 - Test suite: 21/21 passing
-- Spec draft: [`spec/SYNC-method-draft.md`](spec/SYNC-method-draft.md) (IETF Internet-Draft format)
-- IETF submission: planned
+- Spec draft: [`spec/SYNC-method-draft.md`](spec/SYNC-method-draft.md)
+- Benchmark: see [`benchmarks/results.md`](benchmarks/results.md)
+- IETF Internet-Draft: in progress
+- arXiv preprint: in progress
 
 ## Spec
 
