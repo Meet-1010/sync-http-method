@@ -1,0 +1,11 @@
+{
+  "users_v1": {
+    "/users/1": { "id": 1, "name": "Alice", "email": "alice@example.com" },
+    "/users/2": { "id": 2, "name": "Bob", "email": "bob@example.com" }
+  },
+  "users_v3": {
+    "/users/1": { "id": 1, "name": "Alice", "email": "alice_new@example.com" },
+    "/users/2": { "id": 2, "name": "Bob", "email": "bob@example.com" },
+    "/users/3": { "id": 3, "name": "Carol", "email": "carol@example.com" }
+  }
+}
