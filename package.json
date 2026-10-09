@@ -40,7 +40,7 @@
     "http-method"
   ],
   "author": "Meet Chauhan",
-  "license": "ISC",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Meet-1010/sync-http-method.git"

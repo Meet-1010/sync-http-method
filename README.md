@@ -162,3 +162,7 @@ Node's llhttp parser rejects unknown HTTP methods before any Express middleware 
 - Security analysis: [`spec/SECURITY-ANALYSIS.md`](spec/SECURITY-ANALYSIS.md)
 - Discussion: raised on the IETF httpbis list; feedback from Braid's author informed revision -01
 - arXiv preprint: in preparation
+
+## License
+
+MIT. See [LICENSE](LICENSE).
