@@ -70,7 +70,9 @@ function createLinkCodec(secret) {
   function decode(id) {
     if (typeof id !== 'string' || id.length > MAX_ID_LENGTH || !/^[A-Za-z0-9_-]{23,}$/.test(id)) return null;
     const bytes = Buffer.from(id, 'base64url');
-    if (bytes.length <= 17) return null;
+    // One spelling per identifier: base64url can spell the same octets in more than
+    // one way (unused low bits in the last character); only the canonical one counts.
+    if (bytes.length <= 17 || bytes.toString('base64url') !== id) return null;
     const iv = bytes.subarray(0, 16);
     const decipher = crypto.createDecipheriv('aes-256-ctr', encKey, iv);
     const pt = Buffer.concat([decipher.update(bytes.subarray(16)), decipher.final()]);

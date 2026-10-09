@@ -1,0 +1,29 @@
+vcl 4.1;
+
+# Varnish as a shared cache (a CDN edge) in front of the live-updates origin.
+# Immutable updates (links) are cached; concurrent requests for an update that is
+# being fetched wait for it and receive it as it streams in (request coalescing).
+# Everything else (SYNC watch streams, Braid subscriptions with their 209 and 293
+# responses, and Braid's multiplexer) is tunnelled to the origin unchanged.
+
+backend origin {
+  .host = "host.docker.internal";
+  .port = "__ORIGIN_PORT__";
+  .connect_timeout = 5s;
+  .first_byte_timeout = 3600s;
+  .between_bytes_timeout = 3600s;
+}
+
+sub vcl_recv {
+  if (req.url == "/__ready") { return (synth(200, "ready")); }
+  if ((req.method == "GET" || req.method == "HEAD") && req.url ~ "^/sync/u/") { return (hash); }
+  return (pass);
+}
+
+sub vcl_backend_response {
+  set beresp.do_stream = true;
+}
+
+sub vcl_deliver {
+  if (obj.hits > 0) { set resp.http.X-Cache = "HIT"; } else { set resp.http.X-Cache = "MISS"; }
+}

@@ -27,7 +27,7 @@
   belowskip=6pt,
 }
 
-\title{\textbf{SYNC: Consistent, Cacheable Catch-Up\\of Many HTTP Resources}}
+\title{\textbf{SYNC: Consistent, Cacheable Synchronization\\of Many HTTP Resources}}
 \author{Meet Chauhan\\
 \small\href{mailto:meetsc04@gmail.com}{meetsc04@gmail.com}}
 \date{October 2026}
@@ -37,148 +37,140 @@
 \maketitle
 
 \begin{abstract}
-Applications that hold local copies of several server resources must bring all of them up to date, for example when they reconnect. Doing so with one request per resource has three costs that grow with the number of resources: per-request overhead; \emph{torn reads}, in which separate requests observe the server at different moments and combine related resources in a way that never existed; and load concentration, when many clients reconnect at once and the origin computes the same catch-up for each. We describe SYNC, a query format for the HTTP \texttt{QUERY} method (RFC~10008) that addresses all three. A client states the version it holds of each of many resources; the server returns an independent result per resource: a patch, an indication that nothing changed, or the full representation. Resources may have any media type, and versions may be sets of identifiers, compatible with Braid's versioning model. A client can ask for every result to come from one snapshot of the server. It can also let the server redirect it, using the redirection that \texttt{QUERY} defines, to an immutable resource holding the results, which every client in the same state receives, so that ordinary shared caches serve a reconnecting population from one response. We present the design, a reference implementation for Node.js and browsers with 165 tests, a security analysis, and three measurements against the \texttt{braid-http} library, the Mercure hub and plain \texttt{GET} over real sockets. With realistic network and store timing, 82\% of reads made with three parallel requests, with plain \texttt{GET} or with Braid alike, returned combinations of resources that never existed on the server, against none of 300 with SYNC's consistent snapshots, at the same latency. When 100 clients in the same state reconnected through nginx acting as a shared cache, SYNC's shared results reduced the bytes the origin sent from 6.2\,MiB (SYNC without them; 6.6\,MiB from the Mercure hub) to 116\,KiB, against 66\,KiB for per-resource Braid requests that we made cacheable, while each client made 2 requests instead of 50.
+Applications that hold local copies of many server resources must keep them synchronized. Doing so one request per resource has four costs that grow with the number of resources: per-request overhead; \emph{torn reads}, in which separate requests combine related resources in a way that never existed; load on the origin when many clients reconnect at once; and \emph{partial writes}, in which a change to related resources is applied in part and seen half done. We describe SYNC, a query format for the HTTP \texttt{QUERY} method (RFC~10008) and a companion format for \texttt{POST}, that addresses all four. A client states the version it holds of each of many resources and receives an independent result for each: a patch (the smallest of the formats it accepts), ``unchanged'', or the full representation, for any media type. It can ask for every result to come from one snapshot, keep receiving the net changes in one stream with transactions kept whole, and change several resources atomically, with concurrent changes to different parts of a resource merged by the server. Every response can name the URI of the client's next catch-up, which all clients in the same state share, so that ordinary shared caches carry catch-up for a whole population. We evaluate a reference implementation (219 tests) against the \texttt{braid-http} library, the Mercure hub and plain HTTP in five measurements over real sockets. When 100 or 500 clients reconnected at once through a shared cache, the origin received one request and sent 40\,KiB, against 50 requests for per-resource Braid requests made cacheable and 4.3\,MiB to 21.5\,MiB from the Mercure hub. With realistic timing, 79\% and 82\% of reads made with parallel \texttt{GET} and Braid requests combined resources that never existed, and none with SYNC's snapshots. Live, 100 clients received each whole transaction in 38\,ms (median), without ever holding a state that did not exist, where per-resource subscriptions showed such states in 92\% of updates. Atomic transfers ran 1.9 times as fast as pairs of conditional \texttt{PUT}s with no wrong totals visible (against 92\% of reads), and merged concurrent edits to one document lost nothing, with 1 retry where \texttt{If-Match} needed 900.
 \end{abstract}
 
 \section{Introduction}
 
-Applications that keep local state synchronized with a server (mobile applications resuming after being offline, dashboards, editors holding several documents, configuration agents) share a step: the client holds copies of several resources and must bring them current. Most of what it would receive is data it already has.
+Applications that keep local state synchronized with a server (mobile applications resuming after being offline, dashboards, collaborative editors, configuration agents) hold copies of many resources and must keep them current, and often change several of them together.
 
-HTTP offers two standard tools for this. A plain \texttt{GET} returns the full representation every time. A conditional \texttt{GET} returns the full representation or \texttt{304 Not Modified}~\cite{rfc9110}, so a resource that changed in one field is sent again in full. Braid-HTTP~\cite{braid} lets a \texttt{GET} state the version the client holds and returns only the updates since then. All of these work one resource at a time, and catching up many resources with separate requests has three costs:
+HTTP offers per-resource tools. A conditional \texttt{GET} returns the full representation or \texttt{304 Not Modified}~\cite{rfc9110}; Braid-HTTP~\cite{braid} lets a \texttt{GET} state the version the client holds and returns only the updates since, and adds subscriptions and \texttt{PUT} with versions; Mercure~\cite{mercure} pushes events from a hub. Working one resource at a time has four costs:
 
 \begin{enumerate}
   \item \textbf{Overhead.} Each request carries its own headers and often its own connection.
-  \item \textbf{Inconsistency.} Separate requests observe the server at different moments. When resources are related (a post and its author, an order and its lines, a configuration and its schema) the client can assemble a combination that never existed. We call this a \emph{torn read}. It occurs even when every individual response is correct.
-  \item \textbf{Load concentration.} After an outage or a deployment, many clients reconnect at once, typically from the same state. Unless shared caches can answer them, the origin computes and sends the same catch-up to each.
+  \item \textbf{Inconsistency.} Separate requests observe the server at different moments, so a client can assemble related resources (a post and its author, an order and its lines) in a combination that never existed: a \emph{torn read}. The same happens with per-resource streams of live updates.
+  \item \textbf{Load concentration.} After an outage, many clients reconnect at once, typically from the same state. Unless shared caches can answer them, the origin computes and sends the same catch-up to each.
+  \item \textbf{Partial writes.} Changing related resources takes several requests. If one fails, the others have been applied, and other clients can observe the state in between.
 \end{enumerate}
 
-SYNC is a query format for the \texttt{QUERY} method~\cite{rfc10008} in which a client names many resources, with the version it holds of each, in one request. The server answers each resource independently. On top of this the format provides consistent snapshots, which remove torn reads, and two ways to let ordinary shared caches carry the catch-up: \emph{shared results}, a redirect to an immutable resource holding the results that every client in the same state receives, and \emph{links} to immutable per-resource updates.
+SYNC is a query format for \texttt{QUERY}~\cite{rfc10008} in which a client names many resources, with the version it holds of each, in one request, and receives an independent result per resource. On this base it provides consistent snapshots, a stream of whole transactions, atomic changes with merging, and three mechanisms that let ordinary shared caches carry the traffic: shared results, next URIs and links.
 
-An earlier version of this proposal, posted to the IETF HTTP working group, defined a new HTTP method. Discussion there asked how it differed from \texttt{QUERY}; it did not, in any way that matters, and SYNC is now a format for \texttt{QUERY}. Feedback from the Braid authors led to two further changes: versions are sets of identifiers, as in Braid, and representations are no longer restricted to JSON.
+An earlier version of this proposal, posted to the IETF HTTP working group, defined a new HTTP method; discussion there showed that \texttt{QUERY} provides what a new method would, and SYNC is now a format for it. Feedback from the Braid authors led to versions that are sets of identifiers, as in Braid, and to support for any media type.
 
 \paragraph{Contributions.}
 \begin{itemize}
-  \item A query format for \texttt{QUERY} with per-resource results for representations of any media type, versions that are sets of identifiers, a JSON and a multipart result format, and a splice patch format for text and binary content (Section~\ref{sec:design}).
-  \item \emph{Consistent snapshots} across resources, with an explicit confirmation from the server (Section~\ref{sec:consistency}).
-  \item \emph{Shared results}: a use of \texttt{QUERY}'s \texttt{303 (See Other)} redirection with a URI that names the state as well as the query, so that today's shared caches can serve many clients' catch-up; and \emph{links} to immutable updates (Section~\ref{sec:sharing}).
-  \item A reference implementation, including stateless, opaque, authenticated URIs for links and shared results, reuse of computed updates across requests, and a client for browsers and Node.js (Section~\ref{sec:impl}).
-  \item Three measurements on real sockets against the \texttt{braid-http} library, the Mercure hub and plain \texttt{GET}: single-client overhead, torn reads, and reconnect storms through nginx acting as a shared cache, including the conditions in which SYNC does not help (Section~\ref{sec:eval}).
-  \item A security analysis that states which mitigations the implementation enforces (Section~\ref{sec:security}).
+  \item A query format for \texttt{QUERY} with per-resource results for any media type, versions that are sets of identifiers, the smallest patch among the formats a client accepts, and a splice format for text and binary content (Section~\ref{sec:design}).
+  \item Consistent snapshots across resources, confirmed by the server (Section~\ref{sec:consistency}).
+  \item Three ways for today's shared caches to carry catch-up: \emph{shared results} (a \texttt{303} redirect to the results at one state), \emph{next URIs} (the client's next catch-up as a \texttt{GET}, the same for every client in the same state), and \emph{links} to immutable updates (Section~\ref{sec:sharing}).
+  \item \emph{Watching}: one stream of the net changes to many resources, with transactions delivered whole and access evaluated per event (Section~\ref{sec:watch}).
+  \item \emph{Atomic changes} to several resources with a precondition per resource, and server-side merging of concurrent changes to different parts of JSON, text and binary representations (Section~\ref{sec:writes}).
+  \item A reference implementation and five measurements against \texttt{braid-http}, the Mercure hub and plain HTTP, including where SYNC does not win (Sections~\ref{sec:impl} and~\ref{sec:eval}).
 \end{itemize}
 
 \section{Related Work}
 \label{sec:related}
 
-\paragraph{Conditional GET and delta encoding.}
-Entity tags~\cite{rfc9110} give a binary answer. RFC~3229~\cite{rfc3229} adds delta encoding to \texttt{GET}, but the server selects the baseline from its own history; deployment was minimal.
-
 \paragraph{Braid-HTTP.}
-Braid~\cite{braid,braidversions} generalizes HTTP towards state synchronization: versions are sets of identifiers forming a directed acyclic graph (\texttt{Version} and \texttt{Parents} headers), updates are patches or snapshots, clients can subscribe, and merge types support concurrent writers. A \texttt{GET} with \texttt{Parents} returns the updates since that version. This is the closest prior art for a single resource, and Braid covers far more than SYNC: live updates and concurrent writers are outside SYNC's scope. Braid requests are per resource; its multiplexing extension~\cite{braidmux} carries many subscriptions over one connection, while each resource is still requested individually. SYNC adopts Braid's model of versions and its \texttt{Version} and \texttt{Parents} fields in multipart results, and is intended to serve as the multi-resource catch-up step for Braid resources.
+Braid~\cite{braid,braidversions} extends HTTP towards state synchronization: versions are sets of identifiers forming a directed acyclic graph, a \texttt{GET} with \texttt{Parents} returns updates since a version, subscriptions push later updates, \texttt{PUT} carries patches with versions, and merge types resolve concurrent edits. Requests and subscriptions are per resource; a multiplexing extension~\cite{braidmux} carries many subscriptions over one connection. SYNC adopts Braid's versions and \texttt{Version} and \texttt{Parents} fields, and adds what is missing across resources. Braid's merge types resolve concurrent edits to the same part of a resource, which SYNC reports as conflicts.
 
 \paragraph{Mercure and Events Query.}
-Mercure~\cite{mercure} is a publish/subscribe hub over Server-Sent Events that resumes from a hub-wide event identifier by replaying every event since then. Events Query~\cite{eventsquery} uses \texttt{QUERY} to return a representation and notifications for one resource, and lists multi-resource delivery and resumption as out of scope.
+Mercure~\cite{mercure} is a publish/subscribe hub over Server-Sent Events that resumes from a hub-wide event identifier by replaying every event since. Events Query~\cite{eventsquery} uses \texttt{QUERY} to return a representation and notifications for one resource, and lists multi-resource delivery and resumption as out of scope.
 
-\paragraph{JMAP, WebDAV synchronization, GraphQL.}
-JMAP~\cite{rfc8620} returns changes since a state string within its own object model. WebDAV collection synchronization~\cite{rfc6578} provides a token for one collection. GraphQL batches many reads in one request, but defines neither versions nor updates, and its responses are not consistent across fields unless the server makes them so. SYNC is a generic format for resources identified by URI.
+\paragraph{Batching and transactions.}
+JMAP~\cite{rfc8620} returns changes since a state string and applies sets of changes within its own object model; OData batches can group operations atomically within its protocol. WebDAV collection synchronization~\cite{rfc6578} provides a token for one collection. GraphQL batches reads without versions or updates. SYNC is a generic format for resources identified by URI, and its atomic changes use a per-resource precondition, like \texttt{If-Match}, across resources.
 
-\paragraph{Snapshots and caching.}
-Databases avoid torn reads with snapshot isolation or reads ``as of'' a timestamp~\cite{berenson1995}; HTTP has no cross-resource equivalent, and neither has Braid. Content delivery networks absorb load with shared caches~\cite{rfc9111}, which today store responses to \texttt{GET} but not to \texttt{QUERY}.
+\paragraph{Snapshots, merging and caching.}
+Databases avoid torn reads with snapshot isolation~\cite{berenson1995}; HTTP has no cross-resource equivalent. Operational transformation~\cite{ellis1989} and CRDTs~\cite{shapiro2011} merge concurrent edits; SYNC's merging is a conservative transformation that applies a change only if it touches parts that did not change. Application sync engines such as Replicache notify clients and let them pull; SYNC's next URIs and event links make the pulled content cacheable by ordinary HTTP caches~\cite{rfc9111}.
 
 \section{Design}
 \label{sec:design}
 
-\subsection{Why QUERY, Not a New Method}
+\subsection{Why QUERY}
 
-RFC~9110 asks that a new method be generic and define its caching, conditional and range behavior~\cite{rfc9110}. A safe, idempotent request whose content describes what to return is what \texttt{QUERY} provides, with defined caching (the request content is part of the cache key), conditional requests, and ways to give results a URI~\cite{rfc10008}. A new method would add none of these and would be rejected by parsers and intermediaries that do not know it: Node.js~26 rejects an unknown method in its HTTP parser before application code runs, while it accepts \texttt{QUERY}. SYNC is therefore a media type, \texttt{application/sync-baseline+json}, sent with \texttt{QUERY} to a \emph{sync resource}; a \texttt{POST} fallback serves paths that do not yet allow \texttt{QUERY}.
+A safe, idempotent request whose content describes what to return is what \texttt{QUERY} provides, with defined caching (the content is part of the cache key), conditional requests, and ways to give results a URI~\cite{rfc10008}. A new method would add none of these and would be rejected by parsers and intermediaries: Node.js~26 rejects an unknown method before application code runs, while it accepts \texttt{QUERY}. SYNC is therefore a media type, \texttt{application/sync-baseline+json}, sent with \texttt{QUERY} to a \emph{sync resource}, with a \texttt{POST} fallback.
 
-\subsection{Versions}
+\subsection{Versions, Requests and Results}
 
-A version is a non-empty set of version identifiers, written as a string (one identifier) or an array whose order carries no meaning; versions are equal when they are equal as sets. A version after a single change has one identifier; a version after a merge of concurrent changes can have several, as in Braid. Identifiers are printable ASCII so that they can also travel in Structured Fields~\cite{rfc9651}. A version must identify exactly one state of its resource: the representation associated with a version never changes. This one requirement underlies everything that follows: because the update between two given versions is fixed, a server can reuse it across clients and give it a URI that caches may keep.
-
-\subsection{Request and Per-Resource Results}
+A version is a non-empty set of version identifiers, equal to another when equal as sets; a version names exactly one state of its resource. Because the update between two given versions is then fixed, a server can reuse it across clients and give it a URI that caches may keep; this one requirement underlies Sections~\ref{sec:sharing} and~\ref{sec:watch}.
 
 \begin{lstlisting}[style=code]
 QUERY /sync HTTP/1.1
 Content-Type: application/sync-baseline+json
-Accept: application/sync-result+json
 
-{ "baselines": { "/users": "a4f2",
-                 "/doc.md": ["alice-17", "bob-9"],
+{ "baselines": { "/users": "a4f2", "/doc.md": ["alice-17", "bob-9"],
                  "/logo.png": null },
   "accept": ["application/merge-patch+json",
+             "application/json-patch+json",
              "application/sync-splice+json"],
-  "consistent": true, "redirect": true }
+  "consistent": true, "next": true }
 \end{lstlisting}
 
-A \emph{baseline} is the version the client holds, or \texttt{null}. Resource names are absolute-path references on the origin of the sync resource, so a request cannot name another origin. Each named resource is subject to the same access control as a \texttt{GET} of it by the same requester, and a resource the requester may not read is reported exactly like one that does not exist.
-
-\begin{lstlisting}[style=code]
-{ "results": {
-  "/users":    { "status": 200, "from": "a4f2", "to": "c93b",
-                 "format": "application/merge-patch+json",
-                 "data": { "1": { "email": "new@example.com" } } },
-  "/doc.md":   { "status": 200, "from": ["alice-17", "bob-9"],
-                 "to": "alice-18",
-                 "format": "application/sync-splice+json",
-                 "data": { "unit": "codepoint",
-                           "splices": [[120, 4, "SYNC"]] } },
-  "/logo.png": { "status": 200, "from": null, "to": "l7",
-                 "type": "image/png", "encoding": "base64",
-                 "data": "iVBORw0KGgo..." } } }
-\end{lstlisting}
-
-The response is \texttt{204} when every resource is unchanged and otherwise carries a result per resource: \texttt{200} (an update follows), \texttt{304} (unchanged), \texttt{404} (absent, out of scope, or not readable) or \texttt{409} (baseline not retained, only when the client disables recovery; by default it receives the full representation instead, in the same round trip). A failure for one resource never affects another. This is what makes batching usable: with a single status for the request, one stale version among a hundred would force a retry of everything. Errors in the request itself follow RFC~10008 and are reported as problem details~\cite{rfc9457}.
+A \emph{baseline} is the version the client holds, or \texttt{null}. Resource names are absolute paths on the origin of the sync resource, and each is subject to the same access control as a \texttt{GET} of it; a resource the requester may not read is reported like an absent one. The response is \texttt{204} when nothing changed, and otherwise carries a result per resource: \texttt{200} with an update, \texttt{304}, \texttt{404}, or \texttt{409} (an unknown baseline, only when the client disables recovery; by default it receives the full representation in the same round trip). A failure for one resource never affects another.
 
 \subsection{Updates for Any Media Type}
 
-How a representation is carried depends only on its media type: JSON types are JSON values; text types (\texttt{text/*}, XML, JavaScript, and any type with a \texttt{charset}) are UTF-8 text; all others are octets. Updates are JSON Patch~\cite{rfc6902} or JSON Merge Patch~\cite{rfc7396} for JSON types, and a \emph{splice} document for the others: an ordered list of non-overlapping replacements \texttt{[start, deleteCount, insert]}, counted in Unicode code points for text and in octets (with base64 insertions) for binary content. The client lists the patch formats it accepts in preference order; for each resource the server uses the first that applies and can express the change, and sends the full representation when that is not smaller or the media type changed. Recipients validate a splice document completely before applying any of it.
-
-Two result formats are negotiated with \texttt{Accept}. One is the JSON format above. The other is a multipart format~\cite{rfc2046} with one body part per resource, which carries the patch or the representation as octets, so any representation travels without re-encoding; each part has \texttt{Version} and \texttt{Parents} fields in Braid's syntax.
+JSON types are carried as JSON values, text types as UTF-8 text, and all others as octets. Updates are JSON Patch~\cite{rfc6902} or JSON Merge Patch~\cite{rfc7396} for JSON types, and a \emph{splice} document for others: ordered, non-overlapping replacements \texttt{[start, deleteCount, insert]}, counted in code points for text and in octets for binary content. The client lists the formats it can apply; the server computes each that applies and sends the smallest, or the full representation when no patch is smaller. For text, it refines a line-based diff to the words that changed within each changed block, and compares the result with the single changed span of the whole text. Results come in a JSON format or as \texttt{multipart/mixed}~\cite{rfc2046}, with Braid's \texttt{Version} and \texttt{Parents} fields per part.
 
 \subsection{Consistent Snapshots}
 \label{sec:consistency}
 
-With \texttt{"consistent": true} the server either computes every result from the states of the requested resources at one instant, as if all were read atomically, and says so with \texttt{Sync-Consistent: ?1}, or says \texttt{?0}. It never claims a snapshot it did not take, and a client that requires consistency treats anything but \texttt{?1} as failure. Without this request, results can reflect different moments even within one request, because a server typically reads resources separately; separate requests for the resources have the same problem, more severely (Section~\ref{sec:torn}). The guarantee concerns the states from which results are computed; links and shared results do not weaken it, because each names updates between fixed versions.
+With \texttt{"consistent": true} the server either computes every result from the states of the requested resources at one instant and says \texttt{Sync-Consistent: ?1}, or says \texttt{?0}; a client that requires consistency treats anything else as failure. Without it, results can reflect different moments even within one request.
 
-\subsection{Shared Results and Links}
+\subsection{Shared Results, Next URIs and Links}
 \label{sec:sharing}
 
-RFC~10008 lets a server answer a \texttt{QUERY} with \texttt{303 (See Other)}, indicating that the query can be accomplished with a \texttt{GET} of the URI in \texttt{Location}~\cite{rfc10008}. SYNC uses this so that today's shared caches, which store \texttt{GET} responses but not \texttt{QUERY} responses, can carry catch-up. When a request has \texttt{"redirect": true}, the server may respond \texttt{303} with the URI of a \emph{shared result}: a resource whose \texttt{GET} returns exactly the response the request would have received. The URI must identify both the request and the version each result leads to. Two requests therefore receive the same URI only if they would receive the same results, a change to any requested resource yields a different URI, and the content behind a URI never changes, so it can be cached with a long lifetime. This differs from the URI that \texttt{Location} carries in a \texttt{2xx} response to \texttt{QUERY}, which identifies the query and whose results change over time.
+Shared caches store responses to \texttt{GET} but not, today, to \texttt{QUERY}. SYNC therefore gives catch-up three \texttt{GET}-able forms.
 
-The effect is that clients in the same state, which is the common case when a population reconnects after an outage, are sent to one URI, and a shared cache answers all of them from one response. The origin still receives each client's \texttt{QUERY}, but answers it by reading only the current versions of the resources, without computing any update. A server redirects only clients that ask (other clients might not follow a \texttt{303}; Fetch-based clients follow it automatically), never when everything is unchanged, never with a URI longer than intermediaries accept (RFC~9110 recommends at least 8000 octets), and should do so only for results that are the same for every requester.
+\emph{Shared results.} With \texttt{"redirect": true} a server may answer \texttt{303 (See Other)}, as RFC~10008 allows, with the URI of a resource whose \texttt{GET} returns the response the request would have received. The URI identifies the request and the version each result leads to, so clients in the same state receive the same URI and its content never changes. Unlike the URI that \texttt{Location} carries in a \texttt{2xx} response to \texttt{QUERY}, which identifies the query and whose results change, a shared result identifies the results at one state.
 
-\emph{Links} apply the same idea per resource: with \texttt{"links": true} the server may replace large content with the URI of an immutable update, which the client retrieves with \texttt{GET}. Shared results suit clients in identical states; links let results for different states share the updates they have in common. Both are subject to per-\texttt{GET} access control, both answer \texttt{404} or \texttt{410} once the versions involved are no longer retained (the client then repeats its request without them), and both must be protected against forgery and should not reveal resource names or versions.
+\emph{Next URIs.} With \texttt{"next": true} every response carries a \texttt{Sync-Next} field: the URI of the same request from the versions the results lead to. A \texttt{GET} of it is that request, processed when the \texttt{GET} arrives. Clients in the same state hold the same next URI, so a population that was current when it lost its connection reconnects with one \texttt{GET} per client that a cache answers, and the origin sees one request per state. The entity tag of a next-URI response identifies the state its results lead to, so a polling client confirms ``nothing changed'' with a conditional request. A client uses a next URI only while it holds exactly the versions it names.
 
-\subsection{Interaction with HTTP}
+\emph{Links.} With \texttt{"links": true} a server may replace a large update with the URI of an immutable resource holding it, which results for different states can share.
 
-SYNC requests are \texttt{QUERY} requests: safe, idempotent, and cacheable with the content in the cache key. Results usually depend on the requester, so a server must not let shared caches store them unless they are the same for everyone; the reference server sends \texttt{no-store} by default. A server must treat semantically equivalent request content identically, because caches may normalize it before computing a key. Partial results are signalled with the \texttt{Sync-Delta-Complete} Structured Field. Before applying a patch, a client checks that its baseline equals the version it holds, and if applying any part fails, it leaves its copy unchanged.
+All three are subject to per-\texttt{GET} access control and expire when the server no longer keeps the versions involved; the client then sends an ordinary request.
+
+\subsection{Watching}
+\label{sec:watch}
+
+With \texttt{"watch": true} and \texttt{Accept: text/event-stream}, the server responds with a stream of Server-Sent Events~\cite{html}. The first event brings every requested resource current; each later one carries the net change since the previous one. With \texttt{"consistent": true}, every event is computed from one snapshot of all requested resources, so changes committed together arrive together and the client never holds a combination that did not exist. Access is evaluated for every event. Changes that occur while an event is being written are combined into the next, so a slow reader receives the net change, not a backlog. When the stream breaks, the client sends its request again with the versions it holds; the baselines, not an event identifier, are the point of resumption. With links allowed, an event that several watchers receive can be sent as a link to a shared result, so that a cache serves its content once to all of them.
+
+\subsection{Atomic Changes}
+\label{sec:writes}
+
+\begin{lstlisting}[style=code]
+POST /sync HTTP/1.1
+Content-Type: application/sync-changes+json
+
+{ "changes": {
+    "/doc.md": { "base": "v7", "format": "application/sync-splice+json",
+                 "data": { "unit": "codepoint", "splices": [[120, 4, "SYNC"]] } },
+    "/todos":  { "base": "t3", "format": "application/merge-patch+json",
+                 "data": { "3": { "done": true } } } },
+  "merge": true }
+\end{lstlisting}
+
+Each change names the version it was made from. The server applies all changes at one instant, so every snapshot and watcher sees all or none, or applies none, and reports a status per resource: \texttt{412} for a base that is not current, \texttt{409} for a conflict, \texttt{422} for an invalid change, \texttt{424} for a change not applied because another failed. With \texttt{"merge": true}, a change from an older version is applied to the current one when the two touch different parts: JSON Pointer paths for JSON, where all changes within one array conflict because positions shift; ranges for splices, where insertions at the same position are both kept. The response then gives the update from the client's own copy (its base with its change) to the merged version. Repeating a request is made safe by the \texttt{Idempotency-Key} header field~\cite{idempotency}, scoped to the requester.
 
 \section{Reference Implementation}
 \label{sec:impl}
 
 \paragraph{Server.}
-A request handler for Node.js, usable as Express middleware or around a plain handler, serves SYNC requests sent with \texttt{QUERY} or \texttt{POST}, links and shared results, and passes every other request on. Its data source is a store with two functions, ``current state'' and ``state at version'', and optionally a snapshot function; each call receives the request context, so the store can authorize per resource. An in-memory store with atomic multi-resource commits and snapshots is included.
+A Node.js request handler serves reads, watches, writes, links, shared results and next URIs on one path, and passes other requests on. Its store has two required functions (current state, state at a version) and three optional ones (a snapshot, change notification, and an atomic conditional write); each receives the request context for access control. Resolution has two steps: planning reads the versions each result connects, and materializing computes the update. A redirect or next URI plans only and encodes the plan in the URI, so any server instance can serve any URI without shared state. These URIs are deterministic authenticated encryptions (a synthetic IV from HMAC-SHA256, AES-256 in counter mode, keys from HKDF), with one canonical spelling each; plans are compressed before encryption and decompressed only after authentication.
 
-Resolution has two steps. \emph{Planning} reads each resource's current version and decides its status and the two versions its update connects. \emph{Materializing} computes the update. A direct response does both. A redirect plans only, and encodes the plan (the request's options and, per resource, its name, status and versions) in the shared result's URI; a \texttt{GET} of that URI re-reads every version involved through the store, with the requester's context, and materializes. This makes the server stateless: any instance behind a load balancer can serve any URI. If any version is no longer retained, or any resource with status \texttt{200} or \texttt{304} is unreadable for the requester, the \texttt{GET} is \texttt{404}.
-
-URIs for links and shared results are deterministic authenticated encryptions of their content: a synthetic IV computed as an HMAC-SHA256 of the plaintext, AES-256 in counter mode, keys derived with HKDF from a configured secret, and constant-time verification. Determinism makes equal requests receive equal URIs, which caching requires; authentication defeats alteration, including bit-flipping of the malleable ciphertext, which the test suite performs. Shared-result payloads are compressed before encryption to keep URIs short (a request naming 100 resources fits in fewer than 3000 characters), and are decompressed only after authentication, with bounded output.
-
-Updates are memoized per store: because a version names one immutable state, the update between two versions is computed once and reused for every client and every link that needs it. Responses that depend on \texttt{Accept-Encoding} carry \texttt{Vary}; the gzip-coded form of a link or shared result has its own strong entity tag; multipart boundaries are derived from the content, so the same results always encode to the same octets.
+Updates are memoized per store, since a version names one state. After a change, watchers that hold the same versions with the same options and credentials form a group; the event is planned and encoded once and written to every member, and is sent as a link only when the group has more than one member. A watcher still writing an earlier event leaves the group and catches up on its own. Writes plan every change, merge where allowed, and commit through the store's conditional write; a write that loses a race is planned again.
 
 \paragraph{Client.}
-The client is built on \texttt{fetch} and runs in browsers and Node.js. Given resource names it returns their current values (JSON values, strings for text types, byte arrays for others), tracking versions, applying patches, refusing results that do not start from what it holds, following redirects and links, and asking again directly when a shared result or a link has expired or a result does not apply. With \texttt{consistent} it fails unless the server confirms a snapshot. It serializes its state, so a reloaded application resumes with patches. We verified it in Chromium as well as Node.js. Both parts are published as an npm package with TypeScript definitions.
+The client is built on \texttt{fetch} and runs in browsers and Node.js. It tracks versions, applies results, refuses patches that do not start from what it holds, follows redirects, links and next URIs, watches with automatic resumption, writes with the smallest patch from what it holds, and serializes its state (including its next URI). We verified it in Chromium as well as Node.js.
 
 \paragraph{Tests.}
-165 automated tests cover, among others, per-resource failure isolation, transports and fallback, RFC~10008 error behavior, problem details, resource-name validation, per-resource authorization, version sets, every media-type class and both result formats, splice validation, consistent snapshots under concurrent writes, links and shared results (determinism, immutability, eviction, authorization of every entry, forgery and bit-flipping, URI length limits, client fallback), content coding and entity tags, and update reuse. We checked the suite by mutation: removing the HMAC check, ignoring the versions in a shared-result URI, skipping re-authorization of unchanged entries, or skipping the boundary check each makes tests fail.
+219 automated tests cover the protocol, every media-type class, both result formats, consistent snapshots under concurrent writes, the three cacheable forms (determinism, immutability, expiry, access per requester, forgery and bit-flipping, canonical encoding, URI length limits, client fallback), watching (whole transactions, coalescing, removal, access per event, grouping across credentials, resumption, polling fallback), and writes (atomicity, preconditions, merging of JSON, text and binary changes, conflicts, races, idempotent retries per requester). A randomized test checks 400 pairs of concurrent text edits against an oracle. We checked the suite by mutation: removing the HMAC check, ignoring versions in next URIs, grouping watchers regardless of credentials, ignoring conflicts when merging, or applying changes without their preconditions each makes tests fail.
 
 \section{Evaluation}
 \label{sec:eval}
 
-All measurements run on real sockets through TCP proxies that count bytes and add a 40\,ms round-trip time, and every client's final state is compared with the server's; any mismatch aborts the run. Resources are JSON objects of 100 items (about 20\,KiB), of which a seeded fraction changes per round. Sizes are in KiB (1024 bytes) and MiB. The real third-party software is the \texttt{braid-http} library~1.5.1 (\texttt{braidify} on the server and its \texttt{fetch} on the client, with Braid range patches using JSON Pointer ranges) and the Mercure.rocks hub~1.1.0 in Docker. Scripts and complete results are in the repository.
+All measurements run over real sockets through TCP proxies that count bytes and add a 40\,ms round trip, and check every client's final state against the server's. Resources are JSON objects of about 20\,KiB of which a seeded fraction changes per round. The third-party software is \texttt{braid-http}~1.5.1 (with Braid range patches) and the Mercure.rocks hub~1.1.0; nginx~1.27 and Varnish~7.6 act as shared caches. Sizes are in KiB and MiB. Scripts and complete results are in the repository.
 
-\subsection{Single-Client Overhead}
-
-One client brings $N$ resources current after $L$ rounds of change. Table~\ref{tab:bytes} shows bytes as a percentage of full \texttt{GET}, in a \emph{lab} profile (minimal headers, no compression) and a \emph{realistic} profile (bearer token, cookie, browser-style headers, gzip).
+\subsection{One Client}
 
 \begin{table}[h]
 \centering
@@ -190,54 +182,29 @@ One client brings $N$ resources current after $L$ rounds of change. Table~\ref{t
 \cmidrule(lr){3-5}
 \textbf{Profile} & $(N, L)$ & \textbf{Braid} & \textbf{Braid mux} & \textbf{Mercure} & \textbf{Braid H2} & \textbf{SYNC} & \textbf{GET, KiB} \\
 \midrule
-Lab       & (1, 1)    & 6.5  & 16.2  & 8.9   & 6.1  & 7.4  & 20.9 \\
-Lab       & (10, 1)   & 3.4  & 7.5   & 2.2   & 1.7  & 1.9  & 209.4 \\
-Lab       & (100, 1)  & 2.8  & 6.0   & 1.1   & 1.0  & 1.0  & 2094.5 \\
-Lab       & (100, 25) & 22.4 & 38.3  & 29.5  & 24.4 & 24.6 & 2096.5 \\
-Realistic & (1, 1)    & 34.7 & 73.0  & 50.5  & 31.3 & 27.0 & 5.3 \\
-Realistic & (10, 1)   & 22.8 & 38.7  & 10.2  & 8.8  & 3.7  & 53.3 \\
-Realistic & (100, 1)  & 20.4 & 33.0  & 4.7   & 6.8  & 1.0  & 532.9 \\
-Realistic & (100, 25) & 96.2 & 157.9 & 115.0 & 25.8 & 14.0 & 539.5 \\
+Lab       & (1, 1)    & 6.5  & 16.2  & 6.9   & 4.2  & 5.7  & 20.9 \\
+Lab       & (10, 1)   & 3.4  & 7.5   & 1.6   & 1.2  & 1.4  & 209.4 \\
+Lab       & (100, 1)  & 2.8  & 6.0   & 0.8   & 0.6  & 0.7  & 2094.5 \\
+Lab       & (100, 25) & 22.4 & 38.3  & 19.1  & 14.8 & 15.0 & 2096.5 \\
+Realistic & (1, 1)    & 34.7 & 73.0  & 42.9  & 23.8 & 33.1 & 5.3 \\
+Realistic & (10, 1)   & 22.8 & 38.7  & 8.0   & 9.0  & 3.6  & 53.3 \\
+Realistic & (100, 1)  & 20.4 & 33.0  & 3.5   & 6.7  & 0.9  & 532.9 \\
+Realistic & (100, 25) & 96.2 & 157.9 & 74.6  & 22.8 & 10.5 & 539.5 \\
 \midrule
 \multicolumn{2}{l}{Connections at $N=100$} & 100 & 101 & 1 & 1 & 1 & 6 \\
 \bottomrule
 \end{tabular}
-\caption{Total wire bytes (both directions) as a percentage of full \texttt{GET}; lower is better. ``Braid H2'' is a model of a Braid exchange over HTTP/2, which the Node client cannot use over cleartext.}
+\caption{One client brings $N$ resources current after $L$ rounds of change: total bytes as a percentage of full \texttt{GET}; lower is better. \emph{Lab}: minimal headers, no compression; \emph{realistic}: bearer token, cookie, browser headers, gzip. ``Braid H2'' models a Braid exchange over HTTP/2, which the Node client cannot use over cleartext; it uses SYNC's update generator.}
 \label{tab:bytes}
 \end{table}
 
-With minimal headers, SYNC and the Mercure hub are close (21.9 and 23.6\,KiB at $N=100$, $L=1$), and real Braid used 58.9\,KiB over 100 connections. With realistic headers SYNC is the smallest in every configuration with more than one resource, but part of that gap is that neither Braid nor Mercure compresses responses by default; the compressing HTTP/2 Braid model isolates the protocol effect. For a single resource SYNC has no consistent advantage, and when many changes accumulate Braid's item-level range patches are smaller than JSON Patch. With a 40\,ms round trip, pooled per-resource \texttt{GET}s of 100 resources took about 800\,ms, against about 100\,ms for SYNC, Mercure and real Braid, the last by opening one connection per resource.
+Table~\ref{tab:bytes} compares single-client catch-up. With minimal headers, SYNC used 15.6\,KiB for 100 resources after one round, the Mercure hub 17.2 and real Braid 58.9 over 100 connections; after 25 rounds SYNC used 314\,KiB against 470 for Braid's range patches and 401 for the hub, because SYNC sends the smaller of a JSON Patch and a Merge Patch. For one resource SYNC was also smallest among the real software. With realistic headers SYNC was smallest in every configuration with more than one resource, partly because neither Braid nor Mercure compresses by default. The HTTP/2 Braid model, which uses SYNC's update generator, one connection and compressed headers, isolates the protocol effect: with minimal headers it sent 1--17\% fewer bytes than SYNC for 10 or more resources (26\% fewer for one), and with realistic headers SYNC sent 13--64\% of its bytes for 10 or more resources.
 
 \subsection{Torn Reads}
-\label{sec:torn}
 
-A writer commits one transaction every 5\,ms. Each adds a user, adds a post by that user, updates a counter, and removes the oldest user with their post, atomically. In every committed state every post's author is a current user and the counter equals the newest user and post. Clients read \texttt{/users}, \texttt{/posts} and \texttt{/counts} 300 times per approach and check both invariants; every approach reuses its connections. In the \emph{idealized} scenario all delays are fixed, which is the most favourable case for parallel requests because they reach the server at the same instant. In the \emph{realistic} scenario network delays vary by up to 10\,ms and store reads take 1 to 8\,ms (seeded).
-
-\begin{table}[h]
-\centering
-\footnotesize
-\begin{tabular}{lrrr}
-\toprule
- & \multicolumn{2}{c}{\textbf{Torn reads (of 300)}} & \\
-\cmidrule(lr){2-3}
-\textbf{Approach} & \textbf{Idealized} & \textbf{Realistic} & \textbf{Median, realistic} \\
-\midrule
-\texttt{GET}, three in parallel & 3.0\% & 82.3\% & 58\,ms \\
-\texttt{GET}, sequential & 100\% & 100\% & 165\,ms \\
-Braid (\texttt{braid-http}), three in parallel & 3.3\% & 82.0\% & 60\,ms \\
-SYNC, one request & 0\% & 57.7\% & 57\,ms \\
-SYNC, \texttt{consistent} & 0\% & 0\% (95\% CI 0--1.3\%) & 58\,ms \\
-\bottomrule
-\end{tabular}
-\caption{Reads whose combination of resources never existed on the server.}
-\label{tab:torn}
-\end{table}
-
-Table~\ref{tab:torn} shows the result. Separate requests are torn most of the time once timing varies, and even one SYNC request without a snapshot is torn often, because its server reads the three resources separately. Consistent snapshots removed torn reads entirely at no cost in latency. Separate requests could avoid them only with a mechanism to read ``as of'' a state across resources, which neither HTTP nor Braid defines. The rates depend on the write rate and timing; the comparison shows which approaches can produce states that never existed, not universal percentages.
+A writer commits a transaction every 5\,ms that changes three related resources together; clients read them 300 times per approach and check invariants that hold in every committed state. With fixed delays (the case most favourable to parallel requests), 1.7\% of parallel \texttt{GET} reads and 3.0\% of Braid reads were torn. With realistic network and store timing, 79.3\% and 82.3\% were, and one SYNC request without a snapshot 60.0\%, because its server read the resources separately. SYNC with \texttt{consistent} was never torn (0 of 300; 95\% CI 0--1.3\%), at the same median latency (57\,ms).
 
 \subsection{Reconnect Storms}
-
-$K$ clients hold versions of 50 resources and reconnect within one second of each other, five rounds later (41 resources changed). They reach the origin through nginx~1.27 configured as a shared cache with its cache lock, over a 40\,ms round trip, with six connections per client. The origin runs in its own process so that its CPU time can be measured, and every variant starts with a fresh origin and an empty cache. Per-resource \texttt{GET}s and Braid requests are made cacheable (for Braid, \texttt{Cache-Control: public} and \texttt{Vary: Parents}, with the cache keyed on \texttt{Parents}). Nothing is compressed.
 
 \begin{table}[h]
 \centering
@@ -247,53 +214,83 @@ $K$ clients hold versions of 50 resources and reconnect within one second of eac
 \toprule
 \textbf{Approach} & \textbf{Origin KiB} & \textbf{Origin req.} & \textbf{Origin CPU} & \textbf{Req./client} & \textbf{Client p50} \\
 \midrule
-\texttt{GET} (full), cached & 1046 & 50 & 11\,ms & 50 & 399\,ms \\
-Braid, cached & 66 & 50 & 18\,ms & 50 & 523\,ms \\
-SYNC, inline & 6348 & 100 & 48\,ms & 1 & 94\,ms \\
-SYNC, links & 751 & 141 & 56\,ms & 42 & 520\,ms \\
-SYNC, shared result & 116 & 101 & 39\,ms & 2 & 183\,ms \\
-Mercure hub & 6803 & 100 & n/a & 1 & 100\,ms \\
+\texttt{GET} (full), cached & 1046 & 50 & 10\,ms & 50 & 398\,ms \\
+Braid, cached & 66 & 50 & 16\,ms & 50 & 487\,ms \\
+Mercure hub & 4404 & 100 & n/a & 1 & 89\,ms \\
+SYNC, inline & 3988 & 100 & 49\,ms & 1 & 88\,ms \\
+SYNC, shared result (303) & 100 & 101 & 38\,ms & 2 & 170\,ms \\
+\textbf{SYNC, next URI} & \textbf{40} & \textbf{1} & \textbf{12\,ms} & \textbf{1} & \textbf{84\,ms} \\
 \bottomrule
 \end{tabular}
-\caption{100 clients in the same state reconnect through a shared cache. ``Origin'' is what passed the cache. Every SYNC variant computed each of the 41 updates once.}
+\caption{100 clients in the same state reconnect within one second through nginx as a shared cache. Origin columns measure what passed the cache.}
 \label{tab:storm}
 \end{table}
 
-Table~\ref{tab:storm} shows the case where all clients were current before the outage. Without a cache, every client receives its own copy: 6.2\,MiB from the SYNC origin and 6.6\,MiB from the Mercure hub. With shared results, the origin answered each \texttt{QUERY} with a small \texttt{303} and the cache served the one shared result to all clients: 116\,KiB at the origin, within a factor of two of cached Braid, while each client made 2 requests instead of 50 and finished in about a third of the time. The \texttt{QUERY} still reaches the origin, so origin traffic grows with $K$, by about half a KiB per client; each \texttt{QUERY} costs reads of current versions and no update computation. With 500 clients (arriving over five seconds), the origin sent 327\,KiB with shared results, against 31\,MiB inline, 33\,MiB from the Mercure hub and 66\,KiB for cached Braid. When clients went offline at different times (five distinct states), shared results sent 259\,KiB from the origin (one shared result per state); with links inside the shared results, which let different states share updates, 180\,KiB; cached Braid, 99\,KiB, at 50 requests per client.
+Table~\ref{tab:storm} shows 100 clients that were current before an outage reconnecting through a shared cache. Per-resource \texttt{GET}s and Braid requests were made cacheable (for Braid, \texttt{Vary: Parents}). With next URIs, every client sent one \texttt{GET} that the cache answered: the origin received one request and sent 40\,KiB, fewer bytes, requests and CPU than cached Braid, while each client made one request instead of 50 and finished in a sixth of the time. With 500 clients the origin still received one request; the hub then sent 21.5\,MiB. When clients went offline at different times (five distinct states), next URIs reached the origin five times against 97 for Braid, and with links the origin sent 94\,KiB against 99. Shared results reach the same effect for clients without a next URI, at the cost of each client's \texttt{QUERY} reaching the origin.
 
-Two observations matter for interpretation. A shared cache absorbs per-resource Braid requests as well once they are made cacheable: caching is not unique to SYNC, and SYNC's advantage here is one request that reveals which resources changed, which a cache cannot provide for separate requests. And the inline variant shows that update reuse alone keeps origin CPU low but not origin bandwidth; only caching removes the bandwidth.
+\subsection{Live Updates}
+
+100 clients keep 50 resources current while the server commits 10 transactions, each changing several resources. After every update a client applies, its view is checked against the committed states.
+
+\begin{table}[h]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Approach} & \textbf{Origin MiB} & \textbf{Origin CPU} & \textbf{Whole transaction, p50} & \textbf{Torn views} \\
+\midrule
+\multicolumn{5}{l}{\emph{Every client watches all 50 resources}} \\
+braid-http subscriptions & 20.2 & 785\,ms & 152\,ms & 91.6\% \\
+Mercure, event per resource & 8.7 & 257\,ms & 64\,ms & 91.6\% \\
+Mercure, event per transaction & 7.9 & 103\,ms & 39\,ms & 0\% \\
+SYNC watch & 8.1 & 121\,ms & 38\,ms & 0\% \\
+SYNC watch, links & 0.28 & 142\,ms & 93\,ms & 0\% \\
+\midrule
+\multicolumn{5}{l}{\emph{Each client watches 10 of the 50 resources}} \\
+braid-http subscriptions & 3.9 & 442\,ms & 68\,ms & 59.9\% \\
+Mercure, event per resource & 1.7 & 127\,ms & 49\,ms & 59.9\% \\
+Mercure, event per transaction & 7.4 & 100\,ms & 37\,ms & 0\% \\
+SYNC watch & 1.6 & 155\,ms & 36\,ms & 0\% \\
+\bottomrule
+\end{tabular}
+\caption{Live updates for 100 clients. ``Torn views'': updates after which a client held a combination of resources that never existed. Mercure's CPU is that of the hub's container.}
+\label{tab:live}
+\end{table}
+
+Table~\ref{tab:live} shows that per-resource delivery (Braid subscriptions, one Mercure event per resource) leaves clients holding states that never existed between the parts of a transaction after most updates. A Mercure publisher can keep transactions whole by publishing one event per transaction, and SYNC matches its latency, but every subscriber of any changed resource then receives the whole transaction: when clients watched 10 resources each, the hub sent 7.4\,MiB against SYNC's 1.6\,MiB, including changes to resources clients do not watch and might not be allowed to read. With links, SYNC's origin sent 29 times less than inline, at the cost of one more round trip. Mercure's hub, written in Go, used less CPU than the Node reference server.
+
+\subsection{Concurrent Writes}
+
+Ten writers transfer units between pairs of 20 accounts while readers read every account. With two conditional \texttt{PUT}s per transfer, undoing the first when the second fails, 91.7\% of reads saw a wrong total and 120 debits were undone; with one atomic SYNC write, no read saw a wrong total, nothing was undone, and transfers completed at 41.5 per second against 22.1. Ten writers then edited one text document concurrently, each edit replacing a few characters with a unique marker. Whole-document \texttt{PUT}s with \texttt{If-Match} lost nothing but needed 900 retries and 6.1\,MiB at 10.8 edits per second; without a condition, 180 of 200 acknowledged edits were lost. SYNC's merged splices lost nothing, needed one retry, transferred 226\,KiB, and ran at 148.7 edits per second.
 
 \subsection{Limitations}
 
-The measurements use loopback with emulated latency on one machine: they do not model TLS, packet loss, bandwidth limits or a geographically distributed cache, and the data is synthetic. The third-party software runs in default configurations and is driven by code written for this study; applying Braid's JSON range patches is application code. Braid's Node client cannot use HTTP/2 over cleartext, so HTTP/2 figures come from a model. Shared results help only when clients share a state and results are the same for every requester; for per-user data they must be private and add a round trip without benefit. Only catch-up is measured: Braid and Mercure also provide live push, which SYNC does not.
+Everything runs on one machine over loopback with emulated latency, without TLS, packet loss or bandwidth limits, and the data is synthetic. The third-party software runs in default configurations and is driven by code written for this study; Braid's Node client cannot use HTTP/2 over cleartext, so HTTP/2 figures come from a model. Shared caches are nginx and Varnish on the same machine, not a distributed CDN. SYNC's merging reports concurrent edits to the same part of a resource as conflicts, where Braid's merge types resolve them; we did not compare with those. Shared results, next URIs and links help only for data that is the same for every requester; for per-user data they must be private.
 
 \section{Security}
 \label{sec:security}
 
-The accompanying analysis enumerates attack vectors and states which mitigations the implementation enforces.
+\textbf{Access.} Access is evaluated per resource for every request, \texttt{GET} of a link, shared result or next URI, watch event and write. Responses that depend on the requester must not be stored by shared caches; the implementation sends \texttt{no-store} or \texttt{private} unless configured otherwise. Watchers share an event only if their credentials are the same; a test in which one of two watchers in the same state loses access shows that sharing regardless of credentials would leak data.
 
-\textbf{Authorization and caching.} Authorization applies per named resource, and unreadable resources are indistinguishable from absent ones. Responses, links and shared results that depend on the requester must not be stored by shared caches; the implementation sends \texttt{no-store} or \texttt{private} unless configured otherwise. Every \texttt{GET} of a link or shared result is authorized again for its requester, including entries with status \texttt{304}, which reveal the current version.
+\textbf{URIs.} Links, shared results and next URIs can appear in logs and caches, so they are encrypted and reveal no resource names or versions, and authenticated so that they cannot be forged or altered, including by bit-flipping of the malleable ciphertext; a stateless server replays only requests it accepted.
 
-\textbf{Links and shared results.} Their URIs can appear in logs, caches and referrers, so they are encrypted and reveal neither resource names nor versions, and authenticated so they cannot be forged or altered. Counter-mode encryption alone is malleable: an attacker who knows the plaintext layout can flip bits that change a version. The authentication tag defeats this. A stateless server replays from the URI only requests it accepted, bounded like the original request. Compressing before encrypting makes the URI length depend on content the requester receives anyway.
+\textbf{Writes.} Writes require a CORS preflight, are authorized per resource through the store, apply all or nothing, and merge only changes to parts that did not change since the client's base, so no writer's change is overwritten unseen. Idempotency keys are scoped to the requester.
 
-\textbf{Replay, probing and malformed patches.} A patch applied to the wrong version corrupts state, so clients check baselines. Any resume mechanism lets a requester learn whether a version is recognized; versions should be unguessable where history is sensitive. Splice documents are validated completely before use, and a failed update leaves the client's copy unchanged.
-
-\textbf{Resource consumption and compression.} One request can name many resources, so limits apply (100 resources, 64\,KiB) and rate limits should count resources. Compressing results that echo request content alongside confidential data invites length-based attacks; \texttt{QUERY} and \texttt{POST} requests of this type require a CORS preflight, which limits cross-origin influence.
-
-The implementation does not provide TLS, authentication, rate limiting or a bound on per-request time.
+\textbf{Other.} Clients check baselines before applying patches and validate splice documents; versions should be unguessable where history is sensitive; servers must bound resources per request, watches, and merge sizes (the last two are not implemented in the reference server); compressing results that echo request content invites length-based attacks, which preflight requirements limit.
 
 \section{Discussion and Standardization}
 \label{sec:discussion}
 
-\paragraph{Composition.}
-Braid, Mercure and Events Query address live synchronization; SYNC is the step a client performs before opening those streams, or instead of them when polling suffices. Its value is greatest when many related resources are involved: one request, results that belong together, and catch-up that caches can share. For a single resource it adds little. SYNC already uses Braid's versions; whether multi-resource catch-up is best specified as a separate format or as an extension of Braid's update model is a question we are pursuing with the Braid authors.
+\paragraph{Composition with Braid.}
+SYNC uses Braid's versions and is the multi-resource layer that Braid's per-resource requests, subscriptions and \texttt{PUT} lack: one request, consistent snapshots, transactions delivered whole, atomic writes, and catch-up that caches share. Where Braid is stronger, conflict-free merging of concurrent edits, a resource could declare a Braid merge type that the server applies instead of reporting a conflict; we list this as an open question and intend to pursue it with the Braid authors.
 
 \paragraph{Standardization.}
-Because SYNC is a format for an existing method, standardizing it means registering three media types and two header fields, not a method. The draft specification and its open questions (alignment with Braid's patch formats and status codes, a canonical request form for caching, a freshness lifetime for \texttt{303} responses so that caches that learn to store \texttt{QUERY} responses also absorb the requests themselves, and the venue) are in the repository.
+SYNC is a set of formats for existing methods: standardizing it means registering four media types and three header fields, not a method. The draft specification and its open questions are in the repository.
 
 \section{Conclusion}
 
-Catching up many resources one request at a time costs overhead, produces combinations of resources that never existed, and concentrates load on the origin when clients reconnect together. SYNC addresses all three with one format for HTTP's \texttt{QUERY} method: per-resource results for any media type, consistent snapshots that removed torn reads in our measurements at no cost in latency, and shared results and links that let ordinary shared caches carry a reconnecting population's catch-up. It reuses \texttt{QUERY}'s semantics, including its redirection, rather than defining new ones, and adopts Braid's versions. Its advantages are conditional and measured, including where it does not help. The implementation, tests, benchmarks, specification and security analysis are available at \url{https://github.com/Meet-1010/sync-http-method}.
+Keeping many resources synchronized one request at a time costs overhead, shows clients states that never existed, concentrates load on the origin, and applies related writes in part. SYNC addresses all four with formats for HTTP's \texttt{QUERY} and \texttt{POST}: per-resource results for any media type with the smallest update, consistent snapshots, a stream of whole transactions, atomic changes with merging, and three ways for ordinary caches to carry catch-up. In our measurements it removed torn reads and torn live views, reduced a reconnect storm of 100 or 500 clients to one request at the origin, and made atomic transfers and concurrent edits faster and lossless compared with plain HTTP, while matching or exceeding Braid and Mercure in each of their own settings, except for conflict-free merging, the CPU efficiency of a Go hub, and the bytes of a model of Braid over HTTP/2 with minimal headers. The implementation, tests, benchmarks, specification and security analysis are available at \url{https://github.com/Meet-1010/sync-http-method}.
 
 \section*{Acknowledgments}
 
@@ -310,12 +307,6 @@ Fielding, R., Nottingham, M., and Reschke, J. ``HTTP Caching.'' \textit{RFC 9111
 \bibitem{rfc10008}
 Reschke, J., Snell, J., and Bishop, M. ``The HTTP QUERY Method.'' \textit{RFC 10008}, IETF.
 
-\bibitem{rfc9651}
-Nottingham, M. and Kamp, P.-H. ``Structured Field Values for HTTP.'' \textit{RFC 9651}, IETF, September 2024.
-
-\bibitem{rfc9457}
-Nottingham, M., Wilde, E., and Dalal, S. ``Problem Details for HTTP APIs.'' \textit{RFC 9457}, IETF, July 2023.
-
 \bibitem{rfc2046}
 Freed, N. and Borenstein, N. ``Multipurpose Internet Mail Extensions (MIME) Part Two: Media Types.'' \textit{RFC 2046}, IETF, November 1996.
 
@@ -331,11 +322,20 @@ Jenkins, N. and Newman, C. ``The JSON Meta Application Protocol (JMAP).'' \texti
 \bibitem{rfc6578}
 Daboo, C. and Quillaud, A. ``Collection Synchronization for Web Distributed Authoring and Versioning (WebDAV).'' \textit{RFC 6578}, IETF, March 2012.
 
-\bibitem{rfc3229}
-Mogul, J., Krishnamurthy, B., Douglis, F., Feldmann, A., Goland, Y., van Hoff, A., and Hellerstein, D. ``Delta encoding in HTTP.'' \textit{RFC 3229}, IETF, January 2002.
+\bibitem{idempotency}
+Jena, J. and Dalal, S. ``The Idempotency-Key HTTP Header Field.'' Internet-Draft \nolinkurl{draft-ietf-httpapi-idempotency-key-header}, work in progress.
+
+\bibitem{html}
+WHATWG. ``HTML Living Standard: Server-sent events.'' \url{https://html.spec.whatwg.org/multipage/server-sent-events.html}.
 
 \bibitem{berenson1995}
 Berenson, H., Bernstein, P., Gray, J., Melton, J., O'Neil, E., and O'Neil, P. ``A Critique of ANSI SQL Isolation Levels.'' In \textit{Proceedings of ACM SIGMOD}, 1995.
+
+\bibitem{ellis1989}
+Ellis, C. A. and Gibbs, S. J. ``Concurrency Control in Groupware Systems.'' In \textit{Proceedings of ACM SIGMOD}, 1989.
+
+\bibitem{shapiro2011}
+Shapiro, M., Pregui\c{c}a, N., Baquero, C., and Zawirski, M. ``Conflict-Free Replicated Data Types.'' In \textit{Stabilization, Safety, and Security of Distributed Systems (SSS)}, 2011.
 
 \bibitem{braid}
 Toomim, M., Little, G., Walker, R., Bellomy, B., and Gentle, J. ``Braid-HTTP: Synchronization for HTTP.'' Internet-Draft \nolinkurl{draft-toomim-httpbis-braid-http-04}, expired.

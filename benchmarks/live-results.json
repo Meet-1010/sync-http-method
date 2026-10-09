@@ -1,0 +1,139 @@
+{
+  "K": 100,
+  "N": 50,
+  "R": 10,
+  "scenarios": [
+    {
+      "scenario": "all",
+      "name": "Every client watches all 50 resources",
+      "rows": [
+        {
+          "label": "SYNC watch",
+          "originBytes": 8500300,
+          "originRequests": 0,
+          "originCpuMs": 121.22800000000001,
+          "clientBytes": 8500300,
+          "clientRequests": 0,
+          "p50": 38.475830078125,
+          "p95": 45.811767578125,
+          "observations": 1000,
+          "torn": 0
+        },
+        {
+          "label": "SYNC watch, links via shared cache",
+          "originBytes": 294035,
+          "originRequests": 10,
+          "originCpuMs": 141.882,
+          "clientBytes": 9568779,
+          "clientRequests": 1000,
+          "p50": 93.080322265625,
+          "p95": 157.238525390625,
+          "observations": 1000,
+          "torn": 0
+        },
+        {
+          "label": "Braid subscriptions (braid-http, multiplexed)",
+          "originBytes": 21181200,
+          "originRequests": 0,
+          "originCpuMs": 785.422,
+          "clientBytes": 21181200,
+          "clientRequests": 0,
+          "p50": 151.916015625,
+          "p95": 233.353759765625,
+          "observations": 11900,
+          "torn": 10900
+        },
+        {
+          "label": "Mercure, one event per resource",
+          "originBytes": 9113800,
+          "originRequests": null,
+          "originCpuMs": 257.15599999999995,
+          "clientBytes": 9113800,
+          "clientRequests": 0,
+          "p50": 64.185791015625,
+          "p95": 77.879150390625,
+          "observations": 11900,
+          "torn": 10900
+        },
+        {
+          "label": "Mercure, one event per transaction",
+          "originBytes": 8264600,
+          "originRequests": null,
+          "originCpuMs": 102.7480000000005,
+          "clientBytes": 8264600,
+          "clientRequests": 0,
+          "p50": 38.80810546875,
+          "p95": 48.273681640625,
+          "observations": 1000,
+          "torn": 0
+        }
+      ]
+    },
+    {
+      "scenario": "subset",
+      "name": "Each client watches 10 of the 50 resources (chosen at random)",
+      "rows": [
+        {
+          "label": "SYNC watch",
+          "originBytes": 1689742,
+          "originRequests": 0,
+          "originCpuMs": 155.425,
+          "clientBytes": 1689742,
+          "clientRequests": 0,
+          "p50": 36.29345703125,
+          "p95": 41.9482421875,
+          "observations": 931,
+          "torn": 0
+        },
+        {
+          "label": "SYNC watch, links via shared cache",
+          "originBytes": 1689742,
+          "originRequests": 0,
+          "originCpuMs": 155.837,
+          "clientBytes": 1692204,
+          "clientRequests": 0,
+          "p50": 39.332275390625,
+          "p95": 47.98583984375,
+          "observations": 931,
+          "torn": 0
+        },
+        {
+          "label": "Braid subscriptions (braid-http, multiplexed)",
+          "originBytes": 4137046,
+          "originRequests": 0,
+          "originCpuMs": 442.069,
+          "clientBytes": 4137046,
+          "clientRequests": 0,
+          "p50": 67.88330078125,
+          "p95": 84.736328125,
+          "observations": 2324,
+          "torn": 1393
+        },
+        {
+          "label": "Mercure, one event per resource",
+          "originBytes": 1780312,
+          "originRequests": null,
+          "originCpuMs": 127.47800000000007,
+          "clientBytes": 1780312,
+          "clientRequests": 0,
+          "p50": 49.4267578125,
+          "p95": 63.82958984375,
+          "observations": 2324,
+          "torn": 1393
+        },
+        {
+          "label": "Mercure, one event per transaction",
+          "originBytes": 7792982,
+          "originRequests": null,
+          "originCpuMs": 99.57000000000062,
+          "clientBytes": 7792982,
+          "clientRequests": 0,
+          "p50": 36.736083984375,
+          "p95": 41.905517578125,
+          "observations": 931,
+          "torn": 0
+        }
+      ]
+    }
+  ]
+}

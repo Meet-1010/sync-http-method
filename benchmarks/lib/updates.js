@@ -1,12 +1,16 @@
 'use strict';
 
-const { buildUpdate, JSON_PATCH } = require('../../server/src/formats');
+const { buildUpdate, JSON_PATCH, MERGE_PATCH } = require('../../server/src/formats');
 const { applyResult } = require('../../client/src/apply');
 
-// The models and Mercure events carry a JSON Patch, or the full document as
-// application/json when that is not larger (the same rule SYNC uses).
+// The update formats every delta protocol in the benchmarks may use, except real
+// Braid, which uses its own range patches: the smaller of a JSON Patch and a JSON
+// Merge Patch, or the full document when neither is smaller (SYNC's rule).
+const FORMATS = [JSON_PATCH, MERGE_PATCH];
+
+// The models and Mercure events carry the same updates as SYNC.
 function delta(oldData, newData) {
-  const u = buildUpdate({ type: 'application/json', data: oldData }, { type: 'application/json', data: newData }, [JSON_PATCH]);
+  const u = buildUpdate({ type: 'application/json', data: oldData }, { type: 'application/json', data: newData }, FORMATS);
   return u.full ? { format: 'application/json', data: newData } : u;
 }
 
@@ -17,4 +21,4 @@ function applyUpdate(local, format, data) {
     : applyResult(local, 'x', { status: 200, from: 'x', to: 'y', format, data });
 }
 
-module.exports = { delta, applyUpdate };
+module.exports = { delta, applyUpdate, FORMATS };

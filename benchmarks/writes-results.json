@@ -1,0 +1,53 @@
+{
+  "W": 10,
+  "T": 20,
+  "E": 20,
+  "transfers": [
+    {
+      "label": "HTTP: two PUTs with If-Match, undo on failure",
+      "perSecond": 22.111980894884102,
+      "retries": 184,
+      "undos": 120,
+      "total": 20000,
+      "reads": 240,
+      "torn": 220,
+      "bytes": 1745412
+    },
+    {
+      "label": "SYNC: one atomic write of both accounts",
+      "perSecond": 41.46087818908005,
+      "retries": 157,
+      "undos": 0,
+      "total": 20000,
+      "reads": 490,
+      "torn": 0,
+      "bytes": 1226492
+    }
+  ],
+  "edits": [
+    {
+      "label": "HTTP: PUT the whole document with If-Match, retry on 412",
+      "perSecond": 10.768768592321042,
+      "retries": 900,
+      "lost": 0,
+      "acknowledged": 200,
+      "bytes": 6389477
+    },
+    {
+      "label": "HTTP: PUT the whole document, last writer wins",
+      "perSecond": 109.08607455475536,
+      "retries": 0,
+      "lost": 180,
+      "acknowledged": 200,
+      "bytes": 1054272
+    },
+    {
+      "label": "SYNC: splice from the version held, merged by the server",
+      "perSecond": 148.69338940446073,
+      "retries": 1,
+      "lost": 0,
+      "acknowledged": 200,
+      "bytes": 231742
+    }
+  ]
+}

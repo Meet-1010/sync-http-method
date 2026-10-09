@@ -5,7 +5,7 @@
 //   GET  /get/r/<i>      the current resource (cacheable by shared caches)
 //   GET  /braid/r/<i>    braid-http: with Parents, the updates since that version
 //                        (cacheable, Vary: Parents)
-//   QUERY /sync          SYNC (syncHandler); links and shared results under /sync/u/
+//   QUERY /sync          SYNC (syncHandler); links, shared results and next URIs under /sync/u/
 // Controlled over IPC: 'stats' returns counters and CPU time.
 
 const http = require('http');
@@ -26,9 +26,11 @@ for (let i = 0; i < N; i++) for (const e of history[i]) if (e.round <= L) store.
 
 const counters = { requests: 0, get: 0, braid: 0, braidDiffs: 0, sync: 0, linkGets: 0 };
 
+// Responses that reflect the current state get the same freshness as the GET and
+// Braid responses; only GETs of next URIs are stored by the cache.
 const sync = syncHandler({
   store,
-  cacheControl: 'no-store',
+  cacheControl: SHARED,
   links: { secret: SECRET, path: '/sync/u', minBytes: 256, cacheControl: 'public, max-age=31536000, immutable' },
 });
 

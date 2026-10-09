@@ -18,17 +18,20 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
-const { fork, spawn, execFileSync } = require('child_process');
+const { fork, spawn } = require('child_process');
 const undici = require('undici');
 const { fetch: braidFetch } = require('braid-http');
 
 const { syncRequest } = require('../client/src/sync-client');
-const { syncFetch } = require('../client/src/fetch-client');
+const { syncFetch, syncFetchNext } = require('../client/src/fetch-client');
+const { createLinkCodec } = require('../server/src/links');
+const { nextPayload } = require('../server/src/sync-handler');
 const { applyResult } = require('../client/src/apply');
 const { startProxyProcess } = require('./lib/proxy-process');
+const edge = require('./lib/edge');
 const { buildHistories, entryAt, clone, rng } = require('./lib/dataset');
 const { applyBraid } = require('./lib/braid');
-const { applyUpdate } = require('./lib/updates');
+const { applyUpdate, FORMATS } = require('./lib/updates');
 const { MERCURE_URL, mercureAvailable, mercureSetup } = require('./lib/mercure');
 
 const K = Number(process.env.K || 100);
@@ -69,22 +72,8 @@ function startOrigin() {
   })));
 }
 
-function startEdge(originPort) {
-  const conf = fs.readFileSync(path.join(__dirname, 'storm', 'nginx.conf.template'), 'utf8').replace('__ORIGIN_PORT__', String(originPort));
-  fs.writeFileSync(CONF, conf);
-  execFileSync('docker', ['rm', '-f', 'sync-storm-edge'], { stdio: 'ignore' });
-  execFileSync('docker', ['run', '-d', '--name', 'sync-storm-edge', '-p', `127.0.0.1:${EDGE_PORT}:80`, '-v', `${CONF}:/etc/nginx/nginx.conf:ro`, 'nginx:1.27-alpine'], { stdio: 'ignore' });
-  return waitFor(`http://127.0.0.1:${EDGE_PORT}/__ready`);
-}
-
-async function waitFor(url) {
-  for (let i = 0; i < 50; i++) {
-    try { await fetch(url); return; } catch { await new Promise(r => setTimeout(r, 100)); }
-  }
-  throw new Error(`not reachable: ${url}`);
-}
-
-const stopEdge = () => execFileSync('docker', ['rm', '-f', 'sync-storm-edge'], { stdio: 'ignore' });
+const startEdge = originPort => edge.startEdge({ template: path.join(__dirname, 'storm', 'nginx.conf.template'), conf: CONF, originPort, port: EDGE_PORT });
+const stopEdge = edge.stopEdge;
 
 // Each client gets its own connection pool of POOL connections, like a browser.
 const clientDispatcher = () => new undici.Agent({ connections: POOL });
@@ -107,9 +96,30 @@ async function sharedClient(port, g, links) {
   let requests = 0;
   // redirect: 'manual' so that syncFetch follows the 303 itself and every request is counted.
   const fetchImpl = (u, init) => { requests++; return undici.fetch(u, { ...init, dispatcher, redirect: 'manual' }); };
-  const res = await syncFetch(`http://127.0.0.1:${port}/sync`, baselinesAt(g), { transport: 'query', redirect: true, links, fetch: fetchImpl, headers: IDENTITY });
+  const res = await syncFetch(`http://127.0.0.1:${port}/sync`, baselinesAt(g), { transport: 'query', accept: FORMATS, redirect: true, links, fetch: fetchImpl, headers: IDENTITY });
   await dispatcher.close();
   if (res.status !== 200) throw new Error(`shared result: ${res.status}`);
+  failedLinks(res);
+  return { local: applyAll(localAt(g), g, res.body.results), requests };
+}
+
+// The next URI a client received when it last caught up, at round g: the server
+// issues the same URI to every client in that state (a deterministic, authenticated
+// encoding of the request and the versions held), so it is computed here as the
+// server computed it then.
+const linkCodec = createLinkCodec(LINK_SECRET);
+function nextUriAt(g, links) {
+  const planned = history.map((h, i) => ({ resource: `/r/${i}`, plan: { status: 304, to: entryAt(h, g).token } }));
+  return `/sync/u/${linkCodec.encode(nextPayload(planned, 'application/sync-result+json', { recover: true, links, consistent: false }, FORMATS))}`;
+}
+
+async function nextClient(port, g, links) {
+  const dispatcher = clientDispatcher();
+  let requests = 0;
+  const fetchImpl = (u, init) => { requests++; return undici.fetch(u, { ...init, dispatcher }); };
+  const res = await syncFetchNext(nextUriAt(g, links), { fetch: fetchImpl, headers: IDENTITY, base: `http://127.0.0.1:${port}/sync` });
+  await dispatcher.close();
+  if (res.status !== 200) throw new Error(`next URI: ${res.status}`);
   failedLinks(res);
   return { local: applyAll(localAt(g), g, res.body.results), requests };
 }
@@ -146,7 +156,7 @@ const CLIENTS = {
   },
 
   async syncInline(port, ctx, g) {
-    const res = await syncRequest(`http://127.0.0.1:${port}/sync`, baselinesAt(g), { transport: 'query', gzip: false });
+    const res = await syncRequest(`http://127.0.0.1:${port}/sync`, baselinesAt(g), { transport: 'query', accept: FORMATS, gzip: false });
     return { local: applyAll(localAt(g), g, res.body.results), requests: 1 };
   },
 
@@ -155,7 +165,7 @@ const CLIENTS = {
     let requests = 0;
     const fetchImpl = (u, init) => { requests++; return undici.fetch(u, { ...init, dispatcher }); };
     // identity: every variant in this benchmark is measured without content coding
-    const res = await syncFetch(`http://127.0.0.1:${port}/sync`, baselinesAt(g), { transport: 'query', links: true, fetch: fetchImpl, headers: IDENTITY });
+    const res = await syncFetch(`http://127.0.0.1:${port}/sync`, baselinesAt(g), { transport: 'query', accept: FORMATS, links: true, fetch: fetchImpl, headers: IDENTITY });
     await dispatcher.close();
     failedLinks(res);
     return { local: applyAll(localAt(g), g, res.body.results), requests };
@@ -163,6 +173,8 @@ const CLIENTS = {
 
   async syncShared(port, ctx, g) { return sharedClient(port, g, false); },
   async syncSharedLinks(port, ctx, g) { return sharedClient(port, g, true); },
+  async syncNext(port, ctx, g) { return nextClient(port, g, false); },
+  async syncNextLinks(port, ctx, g) { return nextClient(port, g, true); },
 
   async mercure(port, ctx, g) {
     const { markers, counts, topic } = ctx.mercure;
@@ -200,6 +212,8 @@ const VARIANTS = [
   ['SYNC, links via shared cache', 'syncLinks', 'edge'],
   ['SYNC, shared result (303) via shared cache', 'syncShared', 'edge'],
   ['SYNC, shared result (303) with links via shared cache', 'syncSharedLinks', 'edge'],
+  ['SYNC, next URI via shared cache', 'syncNext', 'edge'],
+  ['SYNC, next URI with links via shared cache', 'syncNextLinks', 'edge'],
   ['Mercure (hub)', 'mercure', 'hub'],
 ];
 
@@ -226,30 +240,7 @@ async function runClient(key, port, ctx, g, row) {
   }
 }
 
-// Closed connections hold their local port for 2 MSL (30 s on macOS, 60 s on Linux),
-// and a machine has a limited range of ephemeral ports (about 16000 on macOS). Docker's
-// port forwarding also opens connections inside the Docker host (on macOS, a Linux
-// VM). Before each variant, wait until earlier variants' connections have released
-// their ports on both, so that a large run does not run out.
-function timeWaitCounts() {
-  const host = execFileSync('netstat', ['-an', '-p', 'tcp'], { encoding: 'utf8' }).split('\n').filter(l => l.includes('TIME_WAIT')).length;
-  const sockstat = execFileSync('docker', ['run', '--rm', '--net=host', 'nginx:1.27-alpine', 'cat', '/proc/net/sockstat'], { encoding: 'utf8' });
-  const docker = Number((/\btw (\d+)/.exec(sockstat) || [])[1] || 0);
-  return { host, docker };
-}
-
-async function waitForPorts(limit = 500) {
-  for (let i = 0; i < 90; i++) {
-    let counts;
-    try {
-      counts = timeWaitCounts();
-    } catch {
-      return;
-    }
-    if (counts.host < limit && counts.docker < limit) return;
-    await new Promise(r => setTimeout(r, 2000));
-  }
-}
+const { waitForPorts } = edge;
 
 async function runVariant([label, key, via], scenario, rounds, ctx) {
   const origin = via === 'edge' ? await startOrigin() : null;
@@ -383,12 +374,15 @@ function report(scenarios) {
   md += `## How to read this\n\n`;
   md += `- **Origin** columns measure what reaches the origin past the shared cache: requests, response bytes, and CPU time of the origin process (which also runs the HTTP stack).\n`;
   md += `- **SYNC, shared result (303)**: each client sends one QUERY, which the cache passes to the origin (shared caches do not yet store QUERY responses). The origin reads the current version of each resource, computes no update, and answers \`303 (See Other)\` with a URI that identifies the request and the versions the results lead to (RFC 10008 Section 2.5). Clients in the same state receive the same URI; their GETs are served by the cache, so the origin builds each distinct result once.\n`;
+  md += `- **SYNC, next URI**: when a client last caught up (at the round it went offline), the response named a next URI (\`Sync-Next\`): the same request from the versions it then held. Every client in the same state holds the same URI. On reconnecting, each client sends one GET of it, which the cache answers; the origin computes the results once per distinct state. The origin gives these responses the same freshness as the cacheable GET and Braid responses (\`Cache-Control: public, max-age=600\`).\n`;
+  md += `- **SYNC, next URI with links**: as above, with a link in place of each large update, so results for different states share the updates they have in common.\n`;
   md += `- **SYNC, shared result with links**: as above, and the shared result carries a link in place of each large update, so results for different states share the updates they have in common. It costs each client one request per link.\n`;
   md += `- **SYNC, links**: the same QUERY, answered with the results and a link in place of each large update; the clients fetch the updates through the cache, which keeps them because each link names one immutable update.\n`;
   md += `- **SYNC, inline**: the same QUERY with updates inline. The origin computes each distinct update once (it reuses identical updates) but sends every client its own copy.\n`;
   md += `- **Braid**: per-resource GET with Parents, made cacheable for this benchmark with \`Cache-Control: public\` and \`Vary: Parents\` (nginx keys on the Parents header); unchanged resources are answered 304. With that configuration the cache absorbs Braid's catch-up as well: a shared cache is not unique to SYNC. The difference is the number of requests each client makes.\n`;
   md += `- **GET (full)** is fully cacheable but sends every client the whole of every resource.\n`;
   md += `- **Mercure**: the hub is the origin and replays the history to each subscriber; SSE streams are not shared by caches. Origin CPU is not measured for the hub (it runs in Docker).\n`;
+  md += `- Updates: SYNC sends the smaller of a JSON Patch and a JSON Merge Patch (or the full document); Mercure events carry the same updates; Braid uses its own range patches.\n`;
   md += `- All variants are measured without content coding (no gzip). Bytes exclude TCP and TLS handshakes.\n`;
   md += `- The latency proxies run in their own processes. A client whose catch-up fails with a connection error (the machine's accept queue is small) retries once, whatever the approach; retries: ${scenarios.map(sc => sc.rows.filter(r => r.retries).map(r => `${r.label} ${r.retries}`).join(', ')).filter(Boolean).join('; ') || 'none'}.\n`;
   md += `- Durations for the cached variants include nginx's cache lock: while one request fetches an object from the origin, concurrent requests for it wait and nginx re-checks every 500 ms, which keeps the origin from being hit by all of them at once. Without the lock the cached variants finish sooner but more requests reach the origin.\n`;

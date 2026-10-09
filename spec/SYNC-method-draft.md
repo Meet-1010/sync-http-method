@@ -1,5 +1,5 @@
 ---
-Title: SYNC: Consistent, Cacheable Catch-Up of Multiple HTTP Resources
+Title: SYNC: Consistent, Cacheable Synchronization of Many HTTP Resources
 Abbrev: SYNC
 Intended status: Standards Track (individual submission; venue to be discussed)
 Draft name: draft-chauhan-http-sync-00 (supersedes the "SYNC method" proposal posted to ietf-http-wg on 2026-10-05)
@@ -7,11 +7,11 @@ Author: Meet Chauhan
 Date: October 2026
 ---
 
-# SYNC: Consistent, Cacheable Catch-Up of Multiple HTTP Resources
+# SYNC: Consistent, Cacheable Synchronization of Many HTTP Resources
 
 ## Abstract
 
-This document defines SYNC, a format for the HTTP QUERY method (RFC 10008) with which a client that already holds copies of several resources brings them up to date in one exchange. For each resource the client states the version it holds; the server answers each independently with a patch from that version, an indication that nothing changed, or the full representation. Resources may have any media type, and versions may be single identifiers or sets of identifiers, so causal histories are supported. A client can ask for all results to come from one consistent state of the server, so that related resources are never combined in a way that never existed. A client can also allow the server to answer with a redirect, as QUERY defines, to a resource holding the results: every client in the same state is sent to the same resource, so that ordinary shared caches serve a population of reconnecting clients from one response. Large updates can likewise be returned as links to immutable, cacheable updates. This document does not define a new HTTP method.
+This document defines SYNC, a format for the HTTP QUERY method (RFC 10008), and a companion format for POST, with which a client keeps copies of many resources synchronized with a server. In one request the client states the version it holds of each resource; the server answers each independently with a patch from that version, an indication that nothing changed, or the full representation, and can keep sending the net changes as they happen. Resources may have any media type, and versions may be sets of identifiers, so causal histories are supported. A client can ask for every result to come from one consistent state of the server, so that related resources are never combined in a way that never existed, and can change several resources atomically, with the server merging changes made concurrently to different parts of a resource. Results are designed for ordinary shared caches: the server can redirect clients in the same state to one resource holding their results, name in each response the URI of the client's next catch-up, and return large updates as links to immutable resources, so that a population of clients is served by caches rather than by the origin. This document does not define a new HTTP method.
 
 ---
 
@@ -21,11 +21,12 @@ This document defines SYNC, a format for the HTTP QUERY method (RFC 10008) with 
 
 Applications often hold local copies of several resources: a mobile application resuming after being offline, a dashboard, an editor holding several documents, a configuration agent. To bring them current a client today re-fetches each resource, or issues one conditional request per resource ([RFC9110], Section 13), which returns either the complete representation or `304 (Not Modified)`. Finer-grained catch-up is done with application-specific mechanisms.
 
-Catching up several resources with separate requests has three costs that grow with the number of resources:
+Keeping several resources synchronized with separate requests has four costs that grow with the number of resources:
 
 1. **Overhead.** Each request carries its own headers and, often, its own connection.
-2. **Inconsistency.** Separate requests observe the server at different moments. When resources are related (a post and its author, an order and its lines, a configuration and its schema), the client can assemble a combination that never existed on the server. Section 7.2 measures this.
-3. **Load concentration.** After an outage or a deployment, many clients reconnect at once from the same state. Unless their requests can be served by shared caches, the origin computes and sends the same catch-up to every client. Section 7.3 measures this.
+2. **Inconsistency.** Separate requests observe the server at different moments. When resources are related (a post and its author, an order and its lines, a configuration and its schema), the client can assemble a combination that never existed on the server. Section 8.2 measures this.
+3. **Load concentration.** After an outage or a deployment, many clients reconnect at once from the same state. Unless their requests can be served by shared caches, the origin computes and sends the same catch-up to every client. Section 8.3 measures this; Section 8.4 measures the same effect for clients that keep receiving changes.
+4. **Partial writes.** Changing several related resources takes several requests. If one fails, the others have already been applied, and other clients can observe the state in between. Section 8.5 measures this.
 
 ### 1.2. Approach
 
@@ -37,15 +38,18 @@ SYNC is a query format, identified by the media type `application/sync-baseline+
 - **consistent snapshots**: all results from one state of the server (Section 4.7);
 - **links to immutable updates** that shared caches can store (Section 4.8);
 - **shared results**: a redirect to a resource holding the results, the same for every client in the same state, which shared caches can store (Section 4.9);
-- a **JSON** and a **multipart** result format (Section 5).
+- **next URIs**: in every response, the URI of the client's next catch-up, which clients in the same state share and shared caches can answer (Section 4.11);
+- **watching**: a stream of the net changes to many resources, with changes made together delivered together (Section 4.12);
+- a **JSON** and a **multipart** result format (Section 5);
+- **atomic changes** to several resources, with a precondition per resource and merging of concurrent changes to different parts of a resource (Section 7).
 
 An earlier version of this proposal defined a new method; that design is not pursued (Appendix A).
 
 ### 1.3. Relationship to Other Work
 
-**Braid-HTTP** [BRAID] [BRAID-VERSIONS]. A `GET` carrying a `Parents` header asks for the updates since a stated version; Braid defines versions as sets of identifiers forming a history that is a directed acyclic graph, patches, subscriptions, and merge types for multiple concurrent writers. It covers far more than this document. Requests are per resource; Braid's multiplexing extension [BRAID-MUX] carries many subscriptions over one connection, while each resource is still requested individually. SYNC adopts Braid's model of versions and its `Version` and `Parents` fields within multipart results, and is intended to serve as a multi-resource catch-up step for Braid resources: a client can catch up many resources with one SYNC request and then subscribe to them.
+**Braid-HTTP** [BRAID] [BRAID-VERSIONS]. A `GET` carrying a `Parents` header asks for the updates since a stated version; Braid defines versions as sets of identifiers forming a history that is a directed acyclic graph, patches, subscriptions, and merge types for multiple concurrent writers. It covers far more than this document. Requests are per resource; Braid's multiplexing extension [BRAID-MUX] carries many subscriptions over one connection, while each resource is still requested individually. SYNC adopts Braid's model of versions and its `Version` and `Parents` fields within multipart results, and is intended to serve Braid resources: a client can catch up many resources with one SYNC request and then subscribe to them. SYNC's watching (Section 4.12) carries changes to many resources in one stream and delivers changes made together as one event; Braid's subscriptions are per resource. SYNC's atomic changes (Section 7) apply to several resources together; Braid's `PUT` applies to one, and Braid's merge types resolve concurrent edits to the same part of a resource, which Section 7.3 reports as a conflict.
 
-**Mercure** [MERCURE]. A publish/subscribe hub delivering updates over Server-Sent Events, with resumption from a hub-wide event identifier. Resumption replays every event published since that identifier rather than returning the net change per resource, and requires a connection to the hub.
+**Mercure** [MERCURE]. A publish/subscribe hub delivering updates over Server-Sent Events, with resumption from a hub-wide event identifier. Resumption replays every event published since that identifier rather than returning the net change per resource, and requires a connection to the hub. A publisher can keep a transaction whole by publishing it as one event to the topics of every resource it changes; every subscriber to any of those topics then receives all of it, including changes to resources it does not watch. Section 8.4 measures both ways.
 
 **Events Query** [EVENTS-QUERY]. Uses QUERY to obtain a representation and a stream of notifications from a single resource, using a multipart response. It lists multi-resource delivery as a limitation and leaves versioning and resumption out of scope. SYNC uses the same method for the pull-based, multi-resource case.
 
@@ -53,9 +57,9 @@ An earlier version of this proposal defined a new method; that design is not pur
 
 ### 1.4. Goals and Non-Goals
 
-Goals: catch up any number of resources, of any media type, in one request; isolate failures per resource; allow results from one consistent state; allow the bulk of the data to be served by ordinary shared caches; reuse HTTP semantics rather than define new ones.
+Goals: catch up any number of resources, of any media type, in one request; isolate failures per resource; allow results from one consistent state; deliver later changes as they happen, keeping changes made together together; change several resources atomically; allow the bulk of the data to be served by ordinary shared caches; reuse HTTP semantics rather than define new ones.
 
-Non-goals: server push (subscription mechanisms such as those in Section 1.3 deliver later changes); writes and conflict resolution (SYNC only reads); a version model beyond the requirements of Section 3.
+Non-goals: merging concurrent edits to the same part of a resource without conflicts (merge types such as Braid's provide this); a version model beyond the requirements of Section 3.
 
 ### 1.5. Notational Conventions
 
@@ -123,11 +127,13 @@ Accept: application/sync-result+json
 ```
 
 - `baselines` (REQUIRED): an object whose member names are resource names and whose values are versions or `null`. The member names are the set of resources requested.
-- `accept` (OPTIONAL): an array of patch media types in decreasing preference (Section 4.5). The default is `["application/json-patch+json", "application/sync-splice+json"]`. Unrecognized values MUST be ignored.
+- `accept` (OPTIONAL): an array of the patch media types the client can apply, in decreasing preference (Section 4.5). The default is `["application/json-patch+json", "application/sync-splice+json"]`. Unrecognized values MUST be ignored.
 - `recover` (OPTIONAL, boolean, default `true`): the behavior for baselines the server does not retain (Section 4.4).
 - `consistent` (OPTIONAL, boolean, default `false`): requests a consistent snapshot (Section 4.7).
 - `links` (OPTIONAL, boolean, default `false`): allows the server to return links instead of inline content (Section 4.8).
 - `redirect` (OPTIONAL, boolean, default `false`): allows the server to respond with a redirect to a shared result (Section 4.9).
+- `next` (OPTIONAL, boolean, default `false`): asks for the URI of the next catch-up (Section 4.11).
+- `watch` (OPTIONAL, boolean, default `false`): asks the server to keep sending changes (Section 4.12).
 
 Members not defined here MUST be ignored.
 
@@ -154,7 +160,7 @@ If every requested resource is unchanged, the server MAY respond `204 (No Conten
 | 404 | The resource does not exist, is outside the scope of the sync resource, or the requester may not read it. | nothing else |
 | 409 | The server does not retain the baseline and `recover` is `false`. | nothing else |
 
-When the server does not retain a baseline and `recover` is `true`, it SHOULD return the full representation and MAY indicate that the baseline was not recognized; see Section 8.3 before doing so.
+When the server does not retain a baseline and `recover` is `true`, it SHOULD return the full representation and MAY indicate that the baseline was not recognized; see Section 9.3 before doing so.
 
 A result for one resource MUST NOT depend on whether any other requested resource could be resolved.
 
@@ -176,7 +182,7 @@ Patch formats:
 - `application/merge-patch+json` [RFC7396], for JSON types. Merge Patch cannot express setting an object member to `null` and replaces arrays as a whole; a server MUST NOT use it for a change it cannot express.
 - `application/sync-splice+json` (Section 6), for text and other non-JSON types.
 
-For each resource the server uses the first format in the client's `accept` list that applies to the resource's media type and can express the change, and SHOULD send the full representation instead when that patch is not smaller. The server MUST send the full representation when the resource's media type differs between the baseline and the current version. A server MAY always send the full representation, and clients MUST accept it for any resource.
+For each resource the server MAY use any format in the client's `accept` list that applies to the resource's media type and can express the change. It SHOULD use the one whose content is smallest, preferring the earlier format in the list when sizes are equal, and SHOULD send the full representation instead when no such patch is smaller. The server MUST send the full representation when the resource's media type differs between the baseline and the current version. A server MAY always send the full representation, and clients MUST accept it for any resource.
 
 ### 4.6. Client Processing
 
@@ -188,7 +194,7 @@ When a request has `"consistent": true`, the server either returns results that 
 
 A server that honors the request MUST compute every result from the states of the requested resources at one instant between its receipt of the request and its response, as if all were read atomically, and MUST send `Sync-Consistent: ?1` (a Structured Field Boolean [RFC9651]) in the response. A server that cannot provide such a snapshot MUST send `Sync-Consistent: ?0`, and MUST NOT send `?1`. A client that requires consistency MUST treat a response without `Sync-Consistent: ?1` as not meeting that requirement.
 
-Without consistent snapshots, results for different resources can reflect different moments, even within one request, because a server typically reads them separately. Separate requests for the resources have the same problem, more severely. Section 7.2 measures both.
+Without consistent snapshots, results for different resources can reflect different moments, even within one request, because a server typically reads them separately. Separate requests for the resources have the same problem, more severely. Section 8.2 measures both.
 
 The guarantee concerns the states from which the results are computed. Links (Section 4.8) do not weaken it, because each link names an update between two fixed versions.
 
@@ -202,9 +208,9 @@ The content identified by a link never changes, because it is determined by the 
 - SHOULD make responses cacheable for as long as it expects to retain the versions involved; for resources that are the same for every requester, `Cache-Control: public` with a long lifetime lets shared caches serve every client that catches up from the same state;
 - MUST apply to a `GET` of a link the same access control as to a `GET` of the resource, for the requester of that `GET`;
 - MUST respond `404 (Not Found)` or `410 (Gone)` when it no longer retains the versions involved; the client then repeats the SYNC request for that resource without links;
-- MUST NOT allow a link to be forged or altered to identify other content, and SHOULD use links that do not reveal resource names or version identifiers (Section 8.7).
+- MUST NOT allow a link to be forged or altered to identify other content, and SHOULD use links that do not reveal resource names or version identifiers (Section 9.7).
 
-Because shared caches that do not yet store QUERY responses do store GET responses, links let a deployment place the bulk of a catch-up in today's caches. Section 7.3 measures this.
+Because shared caches that do not yet store QUERY responses do store GET responses, links let a deployment place the bulk of a catch-up in today's caches. Section 8.3 measures this.
 
 ### 4.9. Shared Results
 
@@ -227,6 +233,27 @@ Clients that implement the Fetch standard [FETCH] follow a `303` response with `
 ### 4.10. Partial Results
 
 The `Sync-Delta-Complete` response field is a Boolean Structured Field. `?0` indicates that results for some requested resources were omitted, for example to bound the work of one request; the client SHOULD request the omitted resources again. If the field is absent or `?1`, every requested resource has a result.
+
+### 4.11. Next URIs
+
+When a request has `"next": true`, the server MAY include in its response the `Sync-Next` response field, a Structured Field String [RFC9651] holding a URI reference resolved against the target URI. The URI identifies the same request (the same resources, members, and result format) with each baseline replaced by the version the corresponding result leads to, or `null` for a result with status `404` or `409`. A `GET` of it is processed as that request would be at the time of the `GET`, and its response has the same form, including a `Sync-Next` field for the request after that. A shared result (Section 4.9) for a request with `"next": true` carries the `Sync-Next` field that the direct response would.
+
+Clients that hold the same versions of the same resources hold the same next URI, so their next catch-up is the same `GET`, which shared caches can answer. A population of clients that were current when they lost their connection can therefore reconnect at the cost of one request to the origin per state, and clients that poll do not reach the origin while nothing has changed. The response to a `GET` of a next URI reflects the state of the server when it was generated: its freshness lifetime is the server's to choose, as for any `GET`, and Section 8.1 applies to results that depend on the requester. The entity tag of such a response SHOULD identify the state its results lead to, so that a conditional request ([RFC9110], Section 13) can confirm that nothing changed without transferring the results.
+
+A client MUST use a next URI only while it holds exactly the versions the URI names, for the resources it names; otherwise, and when the `GET` fails, it sends a request. A server SHOULD NOT send a next URI longer than intermediaries are expected to accept (Section 4.9). The requirements of Section 9.7 apply to next URIs.
+
+### 4.12. Watching
+
+When a request has `"watch": true` and its `Accept` field accepts `text/event-stream`, a server that supports watching MAY respond with a stream of events in the Server-Sent Events format [HTML] (`Content-Type: text/event-stream`). A server that does not support it responds as if `watch` were absent; a client recognizes this by the content type of the response.
+
+Each event has the event type `sync`. Its data is a result document in the JSON format of Section 5.1, or an object whose only member, `href`, is a URI reference identifying a shared result (Section 4.9) that holds the result document. The first event brings every requested resource current, as the response to the request without `watch` would. Each later event carries results for the resources that changed since the previous event, as updates from the versions the previous events led to; a resource that has ceased to exist, or that the requester may no longer read, has status `404`. A server:
+
+- MUST evaluate access control for every event as for a request by the same requester at that time;
+- MAY combine changes that occur before an event is sent into that event, so that a client that reads slowly receives the net change rather than every intermediate version;
+- with `"consistent": true`, MUST compute every event from one state of all requested resources, as for a consistent request (Section 4.7), and send `Sync-Consistent` in the response, so that changes made together are delivered together and the client never holds a combination that did not exist;
+- SHOULD send comment lines at intervals, so that intermediaries do not close a stream that is idle.
+
+When the stream ends, or the client cannot apply an event, the client sends the request again with the versions it holds and so receives the net change since. Event identifiers and `Last-Event-ID` are not used: the baselines of the request are the point of resumption. With `"links": true`, a server MAY send an event whose results are large as a link to a shared result: clients that receive the same change from the same versions receive the same link, so that a shared cache serves the content of the event to all of them.
 
 ---
 
@@ -292,79 +319,153 @@ Applying a splice document yields the concatenation of the unchanged ranges and 
 
 ---
 
-## 7. Interaction with HTTP, and Measurements
+## 7. Atomic Changes
 
-### 7.1. Safety, Idempotency, Caching, Conditional and Range Requests
+A client changes several resources together by sending `POST` to the sync resource with content of media type `application/sync-changes+json`. `POST` is used because such a request is neither safe nor idempotent; Section 7.4 describes how to repeat it safely.
+
+### 7.1. Request
+
+```json
+{
+  "changes": {
+    "/doc.md": { "base": "v7", "format": "application/sync-splice+json",
+                 "data": { "unit": "codepoint", "splices": [[120, 4, "SYNC"]] } },
+    "/todos":  { "base": "t3", "format": "application/merge-patch+json",
+                 "data": { "3": { "done": true } } },
+    "/new":    { "base": null, "type": "application/json", "data": { "title": "New" } },
+    "/old":    { "base": "o2", "delete": true }
+  },
+  "merge": true
+}
+```
+
+- `changes` (REQUIRED): an object whose member names are resource names (Section 2) and whose values are changes.
+- Each change has a `base`: the version the change was made from, or `null` to create a resource that does not exist. It has exactly one of: a patch, given by `format` (a patch format of Section 4.5) and `data`; a full representation, given by `type` and `data`, with `"encoding": "base64"` for media types that are neither JSON nor text, as in Section 5.1; or `"delete": true`, which requires a `base`.
+- `merge` (OPTIONAL, boolean, default `false`): allows the server to apply a change whose base is not the current version (Section 7.3).
+- `accept` (OPTIONAL): as in Section 4.2, for the updates in the response.
+
+Content that is not valid JSON is rejected with `400`, and content that does not satisfy this section with `422`, as in Section 4.3.
+
+### 7.2. Processing
+
+The server applies all of the changes or none of them. It applies them only if, for every change, the base is the current version of the resource (or is `null` and the resource does not exist), or `merge` is `true` and the change can be merged (Section 7.3). It applies them atomically: a consistent snapshot (Section 4.7) and every watcher (Section 4.12) observe all of them or none. The server assigns each changed resource a new version. Access control for each resource is that of a change to the resource by the same requester.
+
+The response is `200 (OK)` when the changes were applied and `409 (Conflict)` when they were not, with a result per resource in the `results` member of a JSON result document (Section 5.1):
+
+| Status | Meaning | Present |
+|---|---|---|
+| 200 | Applied. | `from` (the base) and `to` (the new version, absent after a deletion); `rebased` and `update` (Section 7.3) |
+| 403 | The requester may read the resource but not change it. | nothing else |
+| 404 | The resource does not exist, or the requester may not read it. | nothing else |
+| 409 | The change conflicts with a newer version, or its base is no longer retained. | `current`, `reason` |
+| 412 | The base is not the current version, and `merge` is not `true`. | `current` |
+| 422 | The change is invalid, or does not apply to its base. | `reason` |
+| 424 | Not applied, because another change could not be. | nothing else |
+
+`424 (Failed Dependency)` has the meaning that [RFC4918] gives it.
+
+### 7.3. Merging Concurrent Changes
+
+With `"merge": true`, a change made from a base B to a resource whose current version is C is applied to C when it and the change from B to C, which the server computes, affect different parts of the representation:
+
+- JSON representations, changed with JSON Patch or JSON Merge Patch: the parts are JSON Pointer [RFC6901] paths. Two changes conflict when a path that one changes equals, contains, or lies within a path that the other changes. All changes within one array conflict with each other, because positions within it shift.
+- Representations changed with splices (Section 6): the parts are ranges of the base. Two changes conflict when the ranges they replace overlap, or when one inserts strictly within a range that the other replaces. Insertions at the same position are both kept, the one already applied first.
+
+A full representation or a deletion whose base is not the current version conflicts. A conflict is reported with status `409`, and nothing is applied.
+
+When a change is applied after merging, its result has `"rebased": true` and an `update`: a patch (`format` and `data`) or a full representation (`type` and `data`, and `encoding` where needed) that brings the client's copy, its base with its own change applied, to the new version. The merged representation is determined by B, C, and the change, so every server produces the same result.
+
+### 7.4. Repeating a Request
+
+A client that does not receive the response does not know whether the changes were applied. A client SHOULD send an `Idempotency-Key` header field [IDEMPOTENCY] with every request of this kind and repeat the request with the same key and content. A server that supports it MUST answer a repeated request with the response to the first, without applying the changes again; MUST scope keys to the requester, so that no requester ever receives the response to another's request; and MUST reject the reuse of a key with different content with `422`. A client can also find out whether its changes were applied by sending a SYNC request for the resources: the versions it receives show it.
+
+---
+
+## 8. Interaction with HTTP, and Measurements
+
+### 8.1. Safety, Idempotency, Caching, Conditional and Range Requests
 
 SYNC requests are QUERY requests and are therefore safe and idempotent. Their responses are cacheable with the request content in the cache key (Section 2.7 of [RFC10008]). Results usually depend on the requester (Section 4.1); a server MUST NOT let shared caches store responses that do, and SHOULD send `Cache-Control: private` or `no-store` for them. A server MUST treat semantically equivalent request content identically, so that a cache's normalization of the content cannot produce an incorrect response. Conditional requests apply to the results (Section 2.6 of [RFC10008]); a server MAY use a resource's strong entity tag as its version identifier, with the caution that entity tags can differ between content codings of one state. Byte ranges are of little use for results (Section 2.8 of [RFC10008]); Section 4.10 provides partial results.
 
 A server MAY give the results or the query a URI (`Content-Location`, `Location`; Sections 2.3 and 2.4 of [RFC10008]). Shared results (Section 4.9) use the redirection of Section 2.5 of [RFC10008] with a URI that names the state as well as the query. Links (Section 4.8) differ in granularity: each names one resource's update, which many different queries share.
 
-### 7.2. Measured: Torn Reads
+### 8.2. Measured: Torn Reads
 
-In a measurement accompanying this document, a writer commits one transaction every 5 ms, each changing three related resources together, while a client reads the three resources 300 times per approach and checks invariants that hold in every committed state. With realistic variation in network and store timing, 82% of reads made with three parallel `GET` requests, and 82% made with three parallel Braid requests (the braid-http library), returned combinations that never existed on the server. One SYNC request without `consistent` did so in 58% of reads, because its server read the resources separately. SYNC with `consistent` never did (0 of 300; 95% confidence interval 0 to 1.3%), at the same median latency. The repository contains the scripts and the complete results (`benchmarks/consistency-results.md`).
+In a measurement accompanying this document, a writer commits one transaction every 5 ms, each changing three related resources together, while a client reads the three resources 300 times per approach and checks invariants that hold in every committed state. With realistic variation in network and store timing, 79% of reads made with three parallel `GET` requests, and 82% made with three parallel Braid requests (the braid-http library), returned combinations that never existed on the server. One SYNC request without `consistent` did so in 60% of reads, because its server read the resources separately. SYNC with `consistent` never did (0 of 300; 95% confidence interval 0 to 1.3%), at the same median latency (57 ms). The repository contains the scripts and the complete results (`benchmarks/consistency-results.md`).
 
-### 7.3. Measured: Reconnect Storms
+### 8.3. Measured: Reconnect Storms
 
-In a second measurement, 100 clients holding the same versions of 50 resources reconnect within one second through a shared cache (nginx). When every client received its own results, the origin sent 6.2 MiB (and a Mercure hub replaying the same history sent 6.6 MiB). With shared results (Section 4.9), each client sent one QUERY, which the origin answered with a `303` response after reading only current versions, and one `GET`, which the cache answered. The origin sent 116 KiB in total and computed each update once. Per-resource `GET` requests with Braid's `Parents`, made cacheable for the measurement, reached 66 KiB at the origin, but with 50 requests per client instead of 2. When clients went offline at different times (five distinct states), shared results that carry links (Section 4.8) let the states share updates. With 500 clients the origin sent 327 KiB with shared results, against 31 MiB when every client received its own results. The repository contains the figures (`benchmarks/storm-results.md`, `benchmarks/storm-results-k500.md`).
+In a second measurement, 100 clients holding the same versions of 50 resources reconnect within one second through a shared cache (nginx). With next URIs (Section 4.11), each client sent one `GET`, which the cache answered: the origin received one request and sent 40 KiB. Per-resource `GET` requests with Braid's `Parents`, made cacheable for the measurement, reached the origin 50 times and sent 66 KiB, with 50 requests per client; when every client received its own results, the origin sent 3.9 MiB, and a Mercure hub replaying the same history sent 4.3 MiB. With 500 clients the origin still received one request. With shared results (Section 4.9), each client's `QUERY` reached the origin and was answered with a `303` response; the origin sent 100 KiB. When clients went offline at different times (five distinct states), next URIs reached the origin five times, and next URIs whose results carry links (Section 4.8) sent 94 KiB in 65 requests, against 99 KiB in 97 requests for Braid. The repository contains the figures (`benchmarks/storm-results.md`, `benchmarks/storm-results-k500.md`).
+
+### 8.4. Measured: Live Updates
+
+In a third measurement, 100 clients keep 50 resources current while the server commits 10 transactions, each changing several resources together. With watching (Section 4.12) and `"consistent": true`, no client ever held a combination that did not exist, and a client held each whole transaction 38 ms (median) after it was committed, over a 40 ms round trip. With per-resource subscriptions (braid-http) and with one Mercure event per changed resource, 92% of the states clients held between updates mixed transactions. A Mercure hub publishing one event per transaction kept transactions whole at the same latency, but sends every subscriber of any changed resource the whole transaction: when each client watched 10 of the 50 resources, the hub sent 7.4 MiB and SYNC 1.6 MiB. With links to shared results, the origin sent 0.28 MiB instead of 8.1 MiB, and delivery took one more round trip. The repository contains the figures (`benchmarks/live-results.md`).
+
+### 8.5. Measured: Concurrent Writes
+
+In a fourth measurement, 10 writers transfer units between pairs of 20 accounts while readers read every account. With two conditional `PUT` requests per transfer, 92% of reads saw a wrong total, and 120 debits had to be undone after the second request failed; with one atomic change (Section 7), no read saw a wrong total, nothing was undone, and transfers completed 1.9 times as fast. When 10 writers edited one text document concurrently, merging (Section 7.3) let 199 of 200 edits through on the first attempt, with no edit lost; whole-document `PUT` requests with `If-Match` needed 900 retries and 28 times the bytes, and without `If-Match` lost 180 of 200 edits. The repository contains the figures (`benchmarks/writes-results.md`).
 
 ---
 
-## 8. Security Considerations
+## 9. Security Considerations
 
 The companion document `SECURITY-ANALYSIS.md` discusses these points in detail and states which mitigations the reference implementation enforces. The considerations of [RFC9110] and Section 4 of [RFC10008] apply.
 
-### 8.1. Transport
+### 9.1. Transport
 
 Baselines reveal what a client holds; results reveal server state. Requests MUST be sent over a secure connection in any deployment where either is sensitive.
 
-### 8.2. Authorization and Caching
+### 9.2. Authorization and Caching
 
-Authorization is evaluated per named resource (Section 4.1) and, for links and shared results, per `GET` (Sections 4.8 and 4.9). Responses, link content and shared results that depend on the requester MUST NOT be stored by shared caches. A server that makes them public asserts that they are the same for every requester.
+Authorization is evaluated per named resource (Section 4.1); for links, shared results and next URIs, per `GET` (Sections 4.8, 4.9 and 4.11); for watches, per event (Section 4.12); and for atomic changes, per changed resource (Section 7.2). Responses, link content, shared results and the responses to next URIs that depend on the requester MUST NOT be stored by shared caches. A server that makes them public asserts that they are the same for every requester. A server that computes one event for several watchers (for efficiency) MUST do so only for watchers whose access is the same.
 
-### 8.3. Probing Versions
+### 9.3. Probing Versions
 
 Any mechanism in which a client presents a resume point lets the client learn whether the server recognizes it: here, as a patch versus a full representation, as `"baseline": "unrecognized"`, or as status `409`. With guessable identifiers, a requester can learn when resources changed. Version identifiers SHOULD be unguessable where change history is sensitive; servers SHOULD rate-limit per requester, and servers that must not reveal recognition SHOULD omit the `unrecognized` indication and MAY return full representations.
 
-### 8.4. Resource Consumption
+### 9.4. Resource Consumption
 
-One request can name many resources. Servers MUST bound the resources per request and the content size, SHOULD bound the time spent per request, and MAY use partial results (Section 4.10). Rate limits that count requests undercount SYNC; they SHOULD count resources processed. A consistent snapshot (Section 4.7) can require the server to retain state for the duration of a request; servers SHOULD bound that time. A redirect to a shared result (Section 4.9) moves the cost of computing updates from the request to the `GET`, which shared caches can absorb.
+One request can name many resources. Servers MUST bound the resources per request and the content size, SHOULD bound the time spent per request, and MAY use partial results (Section 4.10). Rate limits that count requests undercount SYNC; they SHOULD count resources processed. A consistent snapshot (Section 4.7) can require the server to retain state for the duration of a request; servers SHOULD bound that time. A redirect to a shared result (Section 4.9) or a next URI (Section 4.11) moves the cost of computing updates to a `GET`, which shared caches can absorb. A watch holds a connection and server state for as long as it lasts; servers SHOULD bound the number of watches per requester and in total, and MAY end a watch at any time, since the client resumes from the versions it holds. Merging a change (Section 7.3) costs a comparison of two versions; servers SHOULD bound the size of the representations they merge.
 
-### 8.5. Replay and Integrity
+### 9.5. Replay and Integrity
 
 A patch applied to a different version than its baseline corrupts the client's copy; Section 4.6 requires the client to check. A full representation carries no such check, so a replayed response can roll a client back; where that matters, servers can use version identifiers whose order clients can verify. Response integrity relies on the secure connection.
 
-### 8.6. Malformed Patches
+### 9.6. Malformed Patches
 
 A splice or JSON patch received from a compromised or faulty server could attempt out-of-range or overlapping edits. Section 6 requires recipients to validate splice documents before applying them, and Section 4.6 requires that a failed update leave the client's copy unchanged.
 
-### 8.7. Links and Shared Results
+### 9.7. Links, Shared Results, and Next URIs
 
-Links and shared results are retrieved with `GET`, and their URIs can appear in logs, caches, and referrers. Servers SHOULD use URIs that reveal neither resource names nor version identifiers, MUST prevent them from being forged or altered (for example by authenticating them), and MUST authorize each `GET` (Sections 4.8 and 4.9). A server that encodes the request in the URI, as a stateless server does, MUST bound the work a `GET` can cause as it bounds the request itself (Section 8.4); authenticating the URI ensures that only requests the server accepted can be replayed this way. If the content of a URI is compressed before it is encrypted, its length depends on that content; this reveals nothing to the client, which receives the same information in the results, but can reveal similarity between requests to an observer of URIs who can influence other clients' requests.
+Links, shared results and next URIs are retrieved with `GET`, and their URIs can appear in logs, caches, and referrers. Servers SHOULD use URIs that reveal neither resource names nor version identifiers, MUST prevent them from being forged or altered (for example by authenticating them), and MUST authorize each `GET` (Sections 4.8, 4.9 and 4.11). A server that encodes the request in the URI, as a stateless server does, MUST bound the work a `GET` can cause as it bounds the request itself (Section 9.4); authenticating the URI ensures that only requests the server accepted can be replayed this way. If the content of a URI is compressed before it is encrypted, its length depends on that content; this reveals nothing to the client, which receives the same information in the results, but can reveal similarity between requests to an observer of URIs who can influence other clients' requests.
 
-### 8.8. Compression
+### 9.8. Compression
 
-Results echo resource names from the request and can contain confidential data. Compressing such responses enables length-based attacks when an attacker can influence the request and observe response sizes. QUERY requests, and POST requests with this media type, are not CORS-safelisted [FETCH] and require a preflight; servers SHOULD NOT allow untrusted origins to send them.
+Results echo resource names from the request and can contain confidential data. Compressing such responses enables length-based attacks when an attacker can influence the request and observe response sizes. QUERY requests, and POST requests with the media types of this document, are not CORS-safelisted [FETCH] and require a preflight; servers SHOULD NOT allow untrusted origins to send them.
+
+### 9.9. Atomic Changes
+
+Atomic changes (Section 7) modify resources. Because `POST` requests of type `application/sync-changes+json` require a CORS preflight, a page from another origin cannot send one unless the server allows it; servers MUST NOT allow untrusted origins, and SHOULD require authentication that a page from another origin cannot attach on its own. A server MUST authorize each change as a change to that resource by the same requester, and MUST report a resource the requester may not read as absent (`404`), so that the statuses of a refused request do not reveal it. Idempotency keys (Section 7.4) MUST be scoped to the requester; otherwise one requester could obtain the response to another's request by guessing its key. Merging (Section 7.3) never applies a change to a part of a representation that changed since the client's base, so a client cannot overwrite a change it has not seen.
 
 ---
 
-## 9. Fallback to POST
+## 10. Fallback to POST
 
 Some servers, intermediaries, and libraries do not yet support QUERY. A server MAY accept the same request content with `POST` and, if it does, MUST process it as it would the QUERY request. A client SHOULD use QUERY and MAY retry with `POST` when the QUERY request fails with `400`, `404`, `405`, `415`, or `501`, or is not answered because a connection is closed, remembering per origin. Intermediaries cannot tell that such a `POST` is safe and idempotent, so they will not cache or automatically retry it.
 
 ---
 
-## 10. IANA Considerations
+## 11. IANA Considerations
 
-### 10.1. Media Types
+### 11.1. Media Types
 
-This document registers three media types in the "Media Types" registry, with the following common template values:
+This document registers four media types in the "Media Types" registry, with the following common template values:
 
 - Type name: application
 - Required parameters: none
 - Optional parameters: none
 - Encoding considerations: binary; as for application/json [RFC8259]
-- Security considerations: Section 8 of this document
+- Security considerations: Section 9 of this document
 - Interoperability considerations: none
 - Published specification: this document
 - Applications that use this media type: HTTP clients and servers that synchronize copies of resources
@@ -376,22 +477,23 @@ This document registers three media types in the "Media Types" registry, with th
 - Author: Meet Chauhan
 - Change controller: IETF
 
-and the subtype names `sync-baseline+json` (Section 4.2), `sync-result+json` (Section 5.1), and `sync-splice+json` (Section 6).
+and the subtype names `sync-baseline+json` (Section 4.2), `sync-result+json` (Section 5.1), `sync-splice+json` (Section 6), and `sync-changes+json` (Section 7).
 
-### 10.2. HTTP Field Names
+### 11.2. HTTP Field Names
 
 | Field Name | Status | Structured Type | Reference |
 |---|---|---|---|
 | Sync-Consistent | permanent | Item | Section 4.7 |
 | Sync-Delta-Complete | permanent | Item | Section 4.10 |
+| Sync-Next | permanent | Item | Section 4.11 |
 
 The body part fields of Section 5.2 are not HTTP fields and are not registered.
 
 ---
 
-## 11. References
+## 12. References
 
-### 11.1. Normative References
+### 12.1. Normative References
 
 - [RFC2046] Freed, N. and N. Borenstein, "Multipurpose Internet Mail Extensions (MIME) Part Two: Media Types", RFC 2046, November 1996.
 - [RFC2119] Bradner, S., "Key words for use in RFCs to Indicate Requirement Levels", BCP 14, RFC 2119, March 1997.
@@ -410,8 +512,10 @@ The body part fields of Section 5.2 are not HTTP fields and are not registered.
 - [RFC9457] Nottingham, M., Wilde, E., and S. Dalal, "Problem Details for HTTP APIs", RFC 9457, July 2023.
 - [RFC9651] Nottingham, M. and P-H. Kamp, "Structured Field Values for HTTP", RFC 9651, September 2024.
 - [RFC10008] Reschke, J., Snell, J., and M. Bishop, "The HTTP QUERY Method", RFC 10008.
+- [HTML] WHATWG, "HTML Living Standard", Section 9.2 "Server-sent events", https://html.spec.whatwg.org/multipage/server-sent-events.html.
+- [RFC4918] Dusseault, L., "HTTP Extensions for Web Distributed Authoring and Versioning (WebDAV)", RFC 4918, June 2007.
 
-### 11.2. Informative References
+### 12.2. Informative References
 
 - [BRAID] Toomim, M., et al., "Braid-HTTP: Synchronization for HTTP", draft-toomim-httpbis-braid-http-04 (expired).
 - [BRAID-VERSIONS] Toomim, M., "HTTP Resource Versioning", draft-toomim-httpbis-versions-04 (expired).
@@ -419,21 +523,23 @@ The body part fields of Section 5.2 are not HTTP fields and are not registered.
 - [MERCURE] Dunglas, K., "The Mercure Protocol", draft-dunglas-mercure-08.
 - [EVENTS-QUERY] Gupta, R., "HTTP Events Query", draft-gupta-httpapi-events-query-03.
 - [RFC3229] Mogul, J., et al., "Delta encoding in HTTP", RFC 3229, January 2002.
-- [RFC4918] Dusseault, L., "HTTP Extensions for Web Distributed Authoring and Versioning (WebDAV)", RFC 4918, June 2007.
+- [IDEMPOTENCY] Jena, J. and S. Dalal, "The Idempotency-Key HTTP Header Field", draft-ietf-httpapi-idempotency-key-header (work in progress).
 - [RFC6578] Daboo, C. and A. Quillaud, "Collection Synchronization for Web Distributed Authoring and Versioning (WebDAV)", RFC 6578, March 2012.
 - [RFC8620] Jenkins, N. and C. Newman, "The JSON Meta Application Protocol (JMAP)", RFC 8620, July 2019.
 - [FETCH] WHATWG, "Fetch Standard", https://fetch.spec.whatwg.org/.
 
 ---
 
-## 12. Open Questions
+## 13. Open Questions
 
 1. **Relationship to Braid.** Should multi-resource catch-up be specified as an extension of Braid's versioning and update model, with SYNC's request as its multi-resource form?
 2. **Patch formats.** Should the splice format give way to Braid's range patches [BRAID] once those are specified, or should both be registered?
 3. **Unrecognized baselines.** Should the per-resource status align with the `432 (Version Not Found)` status of [BRAID-VERSIONS]?
 4. **Caching of QUERY responses.** Should this document define a canonical form of the request content to make caches' normalization more effective? Should it recommend a freshness lifetime for `303` responses to SYNC requests (Section 4.9), so that QUERY-aware caches also absorb the requests themselves?
 5. **Partial results.** Is omission sufficient, or is a continuation token needed?
-6. **Venue.** HTTPAPI or HTTPBIS.
+6. **Merge types.** Should a resource be able to declare a merge type [BRAID] that the server applies to concurrent changes instead of reporting the conflicts of Section 7.3?
+7. **Watching.** Server-Sent Events are widely supported; should a multipart stream, as in [EVENTS-QUERY], also be defined?
+8. **Venue.** HTTPAPI or HTTPBIS.
 
 ---
 
@@ -450,6 +556,9 @@ The proposal posted on 2026-10-05 defined a new method, SYNC. Discussion on the 
 - Consistent snapshots (Section 4.7).
 - Links to immutable, cacheable updates (Section 4.8).
 - Shared results through `303 (See Other)` (Section 4.9).
+- Next URIs (Section 4.11) and watching (Section 4.12).
+- The smallest patch among the accepted formats (Section 4.5).
+- Atomic changes to several resources, with merging of concurrent changes (Section 7).
 - Scope, resource names, and per-resource authorization defined.
 - Interaction with caching, conditional and range requests, and result URIs defined.
 - Errors as problem details, aligned with Section 2.1 of [RFC10008].

@@ -3,7 +3,7 @@
 const zlib = require('zlib');
 const { planResults, materializeAll, MAX_RESOURCES } = require('./sync-core');
 const { isVersion } = require('./versions');
-const { negotiate, encodeJson, encodeMultipart, JSON_RESULT, MULTIPART } = require('./encode');
+const { negotiate, encodeJson, encodeMultipart, sfString, JSON_RESULT, MULTIPART } = require('./encode');
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_HEADER_BYTES = 16 * 1024;
@@ -89,15 +89,17 @@ function resultResponse(results, resultType, consistentField) {
 }
 
 // A shared result document: everything needed to rebuild the response from the
-// versions alone. m: result format; a: accept list; l: links allowed; c:
-// Sync-Consistent value ('' when not requested); q: [resource, status, from, to,
-// baseline] per resource.
-function sharedPayload(planned, resultType, accept, linksAllowed, consistentField) {
+// versions alone. m: result format; a: accept list; rc: recover; l: links allowed;
+// c: Sync-Consistent value ('' when not requested); x: a next URI was requested;
+// q: [resource, status, from, to, baseline] per resource.
+function sharedPayload(planned, resultType, request, accept, consistentField) {
   return {
     m: resultType === JSON_RESULT ? 'j' : 'm',
     a: accept || null,
-    l: linksAllowed,
+    rc: request.recover !== false,
+    l: request.links === true,
     c: consistentField,
+    x: request.next === true,
     q: planned.map(({ resource, plan }) => [resource, plan.status, plan.from ?? null, plan.to ?? null, plan.baseline ?? null]),
   };
 }
@@ -111,65 +113,96 @@ const plansOf = payload => payload.q.map(([resource, status, from, to, baseline]
 });
 const resultTypeOf = payload => (payload.m === 'j' ? JSON_RESULT : MULTIPART);
 
-// Pure protocol step: request content + headers in, a complete response out
-// ({ status, headers, body }), before content coding.
-// Status codes follow RFC 10008 Section 2.1: content that is not valid JSON is 400,
-// valid JSON that does not describe a valid request is 422.
-//
-// links: { href, minBytes, shared: { href, maxUriLength } | null } enables links
-// and, when the client allows it with "redirect": true, 303 (See Other) to a
-// shared result document (RFC 10008 Section 2.5).
-async function resolveSync(bodyStr, headers = {}, { store, context, links } = {}) {
+// A next URI: the same request, from the versions the results lead to. A client
+// that applied every result holds exactly those versions (null for 404 and 409).
+// b: [resource, baseline] per resource; m, a, rc, l as above; c: consistent requested.
+function nextPayload(planned, resultType, request, accept) {
+  return {
+    m: resultType === JSON_RESULT ? 'j' : 'm',
+    a: accept || null,
+    rc: request.recover !== false,
+    l: request.links === true,
+    c: request.consistent === true,
+    b: planned.map(({ resource, plan }) => [resource, plan.status === 200 || plan.status === 304 ? plan.to : null]),
+  };
+}
+
+// The request a next URI stands for.
+const requestOf = payload => ({
+  baselines: Object.fromEntries(payload.b),
+  accept: payload.a || undefined,
+  recover: payload.rc,
+  consistent: payload.c,
+  links: payload.l,
+  next: true,
+});
+
+// The Sync-Next field for these results, or nothing when the URI would be too long.
+function nextField(planned, resultType, request, accept, links) {
+  if (request.next !== true || !links?.next) return {};
+  const uri = links.next.href(nextPayload(planned, resultType, request, accept));
+  return uri.length <= links.next.maxUriLength ? { 'Sync-Next': sfString(uri) } : {};
+}
+
+// Validates request content (or the experimental Sync-Baseline header) and returns
+// { request } or { error } (a problem response).
+function parseRequest(bodyStr, headers) {
   const headerValue = headers['sync-baseline'];
   let request;
 
-  if (bodyStr && headerValue) return problem(422, 'Send baselines in the content or in Sync-Baseline, not both');
+  if (bodyStr && headerValue) return { error: problem(422, 'Send baselines in the content or in Sync-Baseline, not both') };
 
   if (!bodyStr && headerValue !== undefined) {
     const baselines = parseBaselineHeader(headerValue);
-    if (!baselines) return problem(422, 'Malformed Sync-Baseline header');
+    if (!baselines) return { error: problem(422, 'Malformed Sync-Baseline header') };
     request = { baselines };
     if (headers['sync-accept']) request.accept = headers['sync-accept'].split(',').map(s => s.trim()).filter(Boolean);
   } else {
     try {
       request = JSON.parse(bodyStr || '{}');
     } catch {
-      return problem(400, 'Request content is not valid JSON');
+      return { error: problem(400, 'Request content is not valid JSON') };
     }
     if (request === null || typeof request !== 'object' || Array.isArray(request)) {
-      return problem(422, 'Request content must be a JSON object');
+      return { error: problem(422, 'Request content must be a JSON object') };
     }
   }
 
   const { baselines, accept } = request;
-  if (!baselines || typeof baselines !== 'object' || Array.isArray(baselines)) return problem(422, 'Missing or invalid baselines');
+  if (!baselines || typeof baselines !== 'object' || Array.isArray(baselines)) return { error: problem(422, 'Missing or invalid baselines') };
   const names = Object.keys(baselines);
-  if (!names.every(isResourceName)) return problem(422, 'Resource names must be absolute paths on this origin, such as "/users"');
+  if (!names.every(isResourceName)) return { error: problem(422, 'Resource names must be absolute paths on this origin, such as "/users"') };
   if (!Object.values(baselines).every(b => b === null || (isVersion(b) && isPrintableVersion(b)))) {
-    return problem(422, 'Each baseline must be null, a version identifier, or an array of distinct version identifiers (printable ASCII)');
+    return { error: problem(422, 'Each baseline must be null, a version identifier, or an array of distinct version identifiers (printable ASCII)') };
   }
-  if (names.length > MAX_RESOURCES) return problem(413, `At most ${MAX_RESOURCES} resources per request`);
+  if (names.length > MAX_RESOURCES) return { error: problem(413, `At most ${MAX_RESOURCES} resources per request`) };
   if (accept !== undefined && (!Array.isArray(accept) || !accept.every(a => typeof a === 'string'))) {
-    return problem(422, 'accept must be an array of media types');
+    return { error: problem(422, 'accept must be an array of media types') };
   }
-  for (const flag of ['recover', 'consistent', 'links', 'redirect']) {
-    if (request[flag] !== undefined && typeof request[flag] !== 'boolean') return problem(422, `${flag} must be a boolean`);
+  for (const flag of ['recover', 'consistent', 'links', 'redirect', 'next', 'watch']) {
+    if (request[flag] !== undefined && typeof request[flag] !== 'boolean') return { error: problem(422, `${flag} must be a boolean`) };
   }
+  return { request };
+}
 
-  const resultType = negotiate(headers.accept);
-  if (!resultType) return problem(406, 'Acceptable result formats: application/sync-result+json, multipart/mixed');
-
-  const normalizedAccept = accept && accept.map(a => a.toLowerCase());
-  const { planned, allUnchanged, consistent } = await planResults(baselines, {
+// The response to a valid request, in the given result format.
+// links: { href, minBytes, shared: { href, maxUriLength } | null, next: { href,
+// maxUriLength } | null } enables links, 303 (See Other) to a shared result when the
+// client allows it with "redirect": true (RFC 10008 Section 2.5), and next URIs
+// when the client asks for them with "next": true.
+async function respond(request, resultType, { store, context, links }) {
+  const accept = request.accept && request.accept.map(a => a.toLowerCase());
+  const { planned, allUnchanged, consistent } = await planResults(request.baselines, {
     recover: request.recover !== false,
     consistent: request.consistent === true,
     store,
     context,
   });
   const consistentField = request.consistent === true ? (consistent ? '?1' : '?0') : '';
+  const next = nextField(planned, resultType, request, accept, links);
 
   if (allUnchanged) {
-    const out = { 'Sync-Delta-Complete': '?1', Vary: 'Accept' };
+    const out = { 'Sync-Delta-Complete': '?1', ...next };
     if (consistentField) out['Sync-Consistent'] = consistentField;
     return { status: 204, headers: out, body: null };
   }
@@ -177,19 +210,32 @@ async function resolveSync(bodyStr, headers = {}, { store, context, links } = {}
   // The results as a resource of their own, which every client sending the same
   // request against the same state is redirected to, and shared caches can store.
   if (request.redirect === true && links?.shared) {
-    const location = links.shared.href(sharedPayload(planned, resultType, normalizedAccept, request.links === true, consistentField));
-    if (location.length <= links.shared.maxUriLength) {
-      return { status: 303, headers: { Location: location, Vary: 'Accept' }, body: null };
-    }
+    const location = links.shared.href(sharedPayload(planned, resultType, request, accept, consistentField));
+    if (location.length <= links.shared.maxUriLength) return { status: 303, headers: { Location: location }, body: null };
   }
 
-  const results = materializeAll(planned, {
-    store,
-    accept: normalizedAccept,
-    links: request.links === true && links ? links : null,
-  });
+  const results = materializeAll(planned, { store, accept, links: request.links === true && links ? links : null });
   const response = resultResponse(results, resultType, consistentField);
-  response.headers.Vary = 'Accept';
+  Object.assign(response.headers, next);
+  return response;
+}
+
+// Pure protocol step: request content + headers in, a complete response out
+// ({ status, headers, body }), before content coding.
+// Status codes follow RFC 10008 Section 2.1: content that is not valid JSON is 400,
+// valid JSON that does not describe a valid request is 422.
+async function resolveSync(bodyStr, headers = {}, options = {}) {
+  const { request, error } = parseRequest(bodyStr, headers);
+  if (error) return error;
+  return resolveRequest(request, headers, options);
+}
+
+// The response to a parsed request: result format negotiation, then respond().
+async function resolveRequest(request, headers, { store, context, links } = {}) {
+  const resultType = negotiate(headers.accept);
+  if (!resultType) return problem(406, 'Acceptable result formats: application/sync-result+json, multipart/mixed');
+  const response = await respond(request, resultType, { store, context, links });
+  if (response.status < 400) response.headers.Vary = 'Accept';
   return response;
 }
 
@@ -250,6 +296,6 @@ async function processSync(socket, bodyStr, headers = {}, keepAlive = false, sto
 }
 
 module.exports = {
-  processSync, resolveSync, resultResponse, plansOf, resultTypeOf, finalize, gzipTag, acceptsGzip, problem, sendProblem, parseBaselineHeader, isResourceName,
+  processSync, resolveSync, resolveRequest, parseRequest, respond, resultResponse, plansOf, resultTypeOf, requestOf, nextField, nextPayload, sharedPayload, finalize, gzipTag, acceptsGzip, problem, sendProblem, parseBaselineHeader, isResourceName,
   MAX_BODY_BYTES, MAX_HEADER_BYTES, GZIP_MIN_BYTES, STATUS_TEXT,
 };

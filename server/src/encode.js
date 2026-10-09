@@ -30,6 +30,11 @@ function qualityFor(ranges, type) {
   return 0;
 }
 
+// Whether Accept explicitly accepts a media type (by its exact name, not by */*).
+function acceptsExactly(acceptHeader, type) {
+  return parseAccept(acceptHeader).some(r => r.type === type && r.q > 0);
+}
+
 // Returns JSON_RESULT, MULTIPART, or null when neither is acceptable.
 function negotiate(acceptHeader) {
   if (!acceptHeader) return JSON_RESULT;
@@ -118,4 +123,4 @@ function encodeMultipart(results) {
   return { body: Buffer.concat(chunks), contentType: `${MULTIPART}; boundary="${boundary}"` };
 }
 
-module.exports = { JSON_RESULT, MULTIPART, negotiate, encodeJson, encodeMultipart, chooseBoundary, sfString, parseAccept };
+module.exports = { JSON_RESULT, MULTIPART, negotiate, acceptsExactly, encodeJson, encodeMultipart, chooseBoundary, sfString, parseAccept };

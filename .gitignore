@@ -4,3 +4,4 @@ node_modules/
 coverage/
 .DS_Store
 benchmarks/storm/nginx.generated.conf
+benchmarks/live/varnish.generated.vcl

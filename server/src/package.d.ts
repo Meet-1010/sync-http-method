@@ -30,7 +30,21 @@ export interface SyncStoreView<T = unknown> {
 export interface SyncStore<T = unknown> extends SyncStoreView<T> {
   /** Optional: a read view fixed at one instant, used for "consistent": true requests. */
   snapshot?(context: SyncContext): SyncStoreView<T> | Promise<SyncStoreView<T>>;
+  /** Optional: call listener with the names of changed resources after each change; returns an unsubscribe function. Enables watching. */
+  subscribe?(listener: (resources: string[]) => void): () => void;
+  /**
+   * Optional: write all changes atomically if every resource is at the version it expects (null: absent),
+   * otherwise write nothing. Enables application/sync-changes+json. Statuses other than 412 (for example 403)
+   * are reported to the client as they are.
+   */
+  write?(changes: StoreChange<T>[], context: SyncContext): WriteOutcome | Promise<WriteOutcome>;
 }
+
+export type StoreChange<T = unknown> =
+  | { resource: string; expect: Version | null; version: Version; type: string; data: T }
+  | { resource: string; expect: Version; deleted: true };
+
+export type WriteOutcome = { ok: true } | { ok: false; statuses: Record<string, number> };
 
 export interface LinkOptions {
   /** At least 32 characters; authenticates and encrypts links. Keep it stable across restarts and servers. */
@@ -46,7 +60,12 @@ export interface LinkOptions {
    * which every client in the same state receives, so shared caches can serve all of them. Default true.
    */
   redirect?: boolean;
-  /** Longest shared-result URI to send; longer results are sent directly. Default 8000 (RFC 9110 Section 4.1). */
+  /**
+   * Give clients that ask ("next": true) a next URI in Sync-Next: a GET of it is the same request from the
+   * versions the results lead to, served with the handler's cacheControl. Default true.
+   */
+  next?: boolean;
+  /** Longest shared-result or next URI to send; longer ones are not used. Default 8000 (RFC 9110 Section 4.1). */
   maxUriLength?: number;
 }
 
@@ -57,13 +76,17 @@ export interface LinkOptions {
  */
 export function syncHandler(options?: {
   store?: SyncStore;
-  /** Cache-Control for successful responses. Default 'no-store'; use public caching only for caller-independent data. */
+  /** Cache-Control for responses that reflect the current state (QUERY, POST and next URIs). Default 'no-store'; use public caching only for caller-independent data. */
   cacheControl?: string;
   /** Accept the POST fallback. Default true. */
   allowPost?: boolean;
   /** Answer QUERY requests with a missing (400) or other (415) Content-Type instead of passing them on. Default false. */
   strict?: boolean;
   links?: LinkOptions;
+  /** Interval of keep-alive comments in watch streams. Default 15000. */
+  heartbeatMs?: number;
+  /** New version identifiers for writes. Default: 72 random bits, base64url. */
+  newVersion?: (resource: string) => string;
 }): (req: IncomingMessage, res: ServerResponse, next: () => void) => Promise<void>;
 
 export interface SyncServer {
@@ -82,8 +105,13 @@ export interface MemoryStore<T = unknown> {
   snapshot(): SyncStoreView<T>;
   /** Adds a version of one resource. */
   addVersion(resource: string, version: Version, data: T, type?: string): void;
-  /** Adds versions of several resources atomically: a snapshot sees all of them or none. */
-  commit(changes: { resource: string; version: Version; data: T; type?: string }[]): void;
+  /** Adds versions of (or removes) several resources atomically: a snapshot sees all of them or none. */
+  commit(changes: ({ resource: string; version: Version; data: T; type?: string } | { resource: string; deleted: true })[]): void;
+  /** Removes a resource: it is absent (404) until a new version is added. */
+  remove(resource: string): void;
+  /** Atomic conditional write (see SyncStore.write). */
+  write(changes: StoreChange<T>[]): WriteOutcome;
+  subscribe(listener: (resources: string[]) => void): () => void;
   getCurrentVersion(resource: string): StoredVersion<T> | null;
   listResources(): string[];
 }

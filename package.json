@@ -1,7 +1,7 @@
 {
   "name": "sync-http-method",
   "version": "0.3.0",
-  "description": "Catch up many HTTP resources in one QUERY: per-resource patches for any media type, consistent snapshots, and cacheable update links.",
+  "description": "Keep many HTTP resources in sync with QUERY: per-resource patches for any media type, consistent snapshots, live watches, atomic multi-resource writes, and catch-up that shared caches can serve.",
   "main": "client/src/index.js",
   "types": "client/src/index.d.ts",
   "exports": {
@@ -28,9 +28,12 @@
     "demo": "node demo/demo.js",
     "bench": "node benchmarks/comparative.js",
     "bench:consistency": "node benchmarks/consistency.js",
-    "bench:storm": "node benchmarks/storm.js"
+    "bench:storm": "node benchmarks/storm.js",
+    "bench:live": "node benchmarks/live.js",
+    "bench:writes": "node benchmarks/writes.js"
   },
   "keywords": [
+    "atomic",
     "braid",
     "catch-up",
     "cdn",
@@ -39,13 +42,17 @@
     "http",
     "http-method",
     "json-patch",
+    "live-updates",
     "merge-patch",
     "multipart",
     "offline",
     "query",
     "rest",
+    "server-sent-events",
+    "sse",
     "sync",
-    "synchronization"
+    "synchronization",
+    "transactions"
   ],
   "author": "Meet Chauhan",
   "license": "MIT",

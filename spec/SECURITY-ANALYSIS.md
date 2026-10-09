@@ -23,6 +23,9 @@ This document accompanies `SYNC-method-draft.md`. Terminology follows the draft:
 | Shared caches | Cacheable QUERY responses and link responses can leak one requester's results to another |
 | Links | Forged or altered links could retrieve other content; readable links leak names and versions into logs |
 | Shared results | A shared result URI that could be forged, read, or served across requesters would leak results or names; a stale one could deliver old results |
+| Next URIs | The same risks as shared results, for a URI whose results follow the current state |
+| Watches | Long-lived streams hold server resources; an event computed for one watcher must never reach another with different access |
+| Atomic changes | Writes from another origin (CSRF), writes to resources the requester may not change, replayed or partially applied changes, idempotency keys that leak another requester's response |
 | Client copies | A malformed patch could corrupt or crash the client |
 
 ## 2. Implementation Status of Mitigations
@@ -48,6 +51,14 @@ The reference server is a research implementation. This table says which mitigat
 | Shared result URIs longer than 8000 octets are not sent (results are sent directly) | Implemented, tested |
 | Redirects only for clients that ask (`"redirect": true`), never for all-unchanged requests | Implemented, tested |
 | Distinct strong entity tags for gzip and identity forms; weak comparison for `If-None-Match`; `Vary: Accept-Encoding` whenever coding depends on it | Implemented, tested |
+| Next URIs opaque and authenticated like links; one canonical spelling per identifier; each GET evaluated for its requester | Implemented, tested |
+| Watches: access evaluated for every event; events shared only between watchers with the same credentials (Authorization and Cookie) and the same versions; a slow watcher receives the net change, so no backlog builds up | Implemented, tested (including a test where one watcher loses access) |
+| Watches: limit on the number of watches per requester and in total | **Not implemented**; the application or a proxy must bound them |
+| Atomic changes: all or nothing through the store's conditional write; validated before anything is applied; 64 KiB request limit | Implemented, tested |
+| Atomic changes: per-resource authorization through the store (`write` may refuse with 403 or 404) | Implemented, tested (the policy itself is the application's) |
+| Idempotency keys scoped to the requester's credentials; reuse with different content refused (422) | Implemented, tested; keys are kept in memory (10000 most recent) and do not survive a restart |
+| Merging refuses any change to a part of a representation that changed since the client's base | Implemented, tested (including 400 random concurrent text edits checked against an oracle) |
+| Bound on the size of representations merged | **Not implemented** |
 | Splice documents validated (ordering, overlap, bounds, types) before anything is applied | Implemented, tested |
 | A failed update leaves the client's copy unchanged | Implemented, tested |
 | Consistent snapshots reported honestly (`Sync-Consistent: ?0` when the store cannot provide one) | Implemented, tested |
@@ -199,6 +210,40 @@ A subtle case: links in the reference implementation are encrypted with AES-CTR,
 - A shared result names fixed versions, so following an old URI yields old but valid results; Section 4.6 of the spec still applies to every patch. The `303` response carries the handler's `Cache-Control` (default `no-store`), so a QUERY-aware cache cannot keep it longer than the deployment allows.
 - Equal URIs reveal equal requests and states, which is what lets caches share them. The URI length depends on the compressed content, but the content is information the requester receives in the results anyway; an observer of URIs who can also influence other clients' requests could learn about similarity between requests, as with any compressed content (3g).
 
+### n) Next URIs
+
+**Description.** A next URI (spec Section 4.11) names a request and the versions a client holds; a GET of it returns the results from those versions at the time of the GET. Its risks are those of shared results (3m), except that its content follows the current state.
+
+**Mitigations**
+
+- The same authenticated, opaque encoding as links and shared results; altered, foreign, and non-canonical spellings are `404`.
+- Every GET is a fresh request evaluated for its requester: resources it may not read are `404`, whoever obtained the URI.
+- Responses use the handler's `Cache-Control` for current results (default `no-store`), not the immutable caching of links. Public caching is a deployment decision for data that is the same for everyone.
+- The client uses a next URI only while it holds exactly the versions the URI names (it compares the resources, versions and options it recorded), and falls back to a request if the GET fails.
+
+### o) Watches
+
+**Description.** A watch (spec Section 4.12) keeps a stream open and sends events as resources change. Risks: resource exhaustion by many or slow watchers; events sent after access was withdrawn; an optimization that computes an event once for several watchers leaking one requester's results to another; a backlog of events for a client that reads slowly.
+
+**Mitigations**
+
+- Access is evaluated for every event with the watcher's own request context; a resource the requester may no longer read is reported as `404`.
+- Watchers share an event only when they hold the same versions with the same options and the same credentials (`Authorization` and `Cookie`). A test removes access from one of two watchers in the same state and checks that only the other receives the new data; removing credentials from the grouping makes that test fail.
+- A watcher that is still writing an event is left out of the next group; changes are coalesced and it later receives the net change, so the server keeps no queue per watcher.
+- Not implemented: limits on the number of watches. Deployments must bound them (per requester and in total), and may end watches at any time, since clients resume from the versions they hold.
+
+### p) Atomic changes
+
+**Description.** Atomic changes (spec Section 7) modify several resources in one `POST`. Risks: cross-origin writes; writes to resources the requester may read but not change; a change applied twice when a client repeats a request; a change applied partially; an idempotency key that returns another requester's response; a merge that silently overwrites another writer's change.
+
+**Mitigations**
+
+- `application/sync-changes+json` is not a CORS-safelisted content type, so cross-origin writes need a preflight; servers must not allow untrusted origins and should require authentication a cross-origin page cannot attach.
+- Every change goes through the store's conditional write with the requester's context; the store can refuse any resource (`403`, or `404` for resources the requester may not read), and then nothing is written.
+- All or nothing: the store's `write` commits every change at one instant or none; a change that lost a race is planned again from the new versions (at most four times) and otherwise reported as `412`.
+- Idempotency keys are scoped to the requester's credentials, and a key reused with different content is refused, so repeating a request never applies it twice and never returns another requester's response.
+- Merging applies a change only if it touches parts of the representation that did not change since the client's base (JSON paths, with any array as one part; splice ranges), so no writer's change is overwritten without being seen. A randomized test checks 400 pairs of concurrent text edits against an oracle.
+
 ## 4. Transport Requirements
 
 - SYNC MUST be deployed over TLS in production. Baselines reveal client state and results reveal server state.
@@ -214,13 +259,14 @@ A subtle case: links in the reference implementation are encrypted with AES-CTR,
 | Requires client-supplied state | No | Yes (baselines) |
 | Safe | Yes | Yes |
 | Cost per request | One resource | Up to the resource cap |
-| Cacheable | Yes | Yes (as QUERY), and links and shared results are cacheable GETs; `private` or `no-store` when results depend on the requester |
+| Cacheable | Yes | Yes (as QUERY), and links, shared results and next URIs are cacheable GETs; `private` or `no-store` when results depend on the requester |
+| Writes | One resource per request | Several resources, all or nothing, with a precondition per resource |
 | Cross-resource consistency | No (separate requests) | Yes, with `consistent` |
 
 The new surface relative to GET is baseline probing (3c), batching (3d, 3e), caching of responses whose cache key is the request content (3f), and links and shared results (3i, 3m). The first is shared with every resume-token protocol; the second is specific to multi-resource requests; the third is shared with every use of QUERY; the fourth is the price of letting today's caches serve catch-up, and is closed by authenticated, opaque URIs and per-GET authorization.
 
 ## 6. What This Analysis Does Not Cover
 
-- Interaction with Braid-style merge semantics or CRDT conflict resolution (SYNC is read-only).
+- Braid-style merge types or CRDT conflict resolution: SYNC's merging (spec Section 7.3) reports conflicts instead of resolving them.
 - A formal model or proof; this is a threat enumeration.
 - Denial of service at the transport layer.

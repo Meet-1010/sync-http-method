@@ -17,7 +17,7 @@ const { syncHandler, createMemoryStore } = require('../server/src/package');
 const { startProxy } = require('./lib/proxy');
 const { buildHistories, entryAt, clone, CHANGE_FRACTION, ITEMS_PER_CHANGE } = require('./lib/dataset');
 const { braidUpdate, applyBraid } = require('./lib/braid');
-const { delta, applyUpdate } = require('./lib/updates');
+const { delta, applyUpdate, FORMATS } = require('./lib/updates');
 const {
   MERCURE_URL, MERCURE_SUBSCRIBER_KEY, mercureToken, mercureAvailable, mercureSetup,
 } = require('./lib/mercure');
@@ -342,7 +342,7 @@ const RUNNERS = {
     const local = baselineState(ctx.history);
     const baselines = {};
     for (let i = 0; i < ctx.N; i++) baselines[ctx.syncName(i)] = 'v0';
-    const res = await syncRequest(`http://127.0.0.1:${port}/sync`, baselines, { transport: 'query', headers: ctx.profile.headers, gzip: ctx.profile.gzip });
+    const res = await syncRequest(`http://127.0.0.1:${port}/sync`, baselines, { transport: 'query', accept: FORMATS, headers: ctx.profile.headers, gzip: ctx.profile.gzip });
     assert.strictEqual(res.transport, 'QUERY');
     if (res.status === 200) {
       for (let i = 0; i < ctx.N; i++) {
@@ -432,11 +432,11 @@ function report({ results, protocols }) {
   md += `A client holds N resources (100 items each, about 20 KB as JSON) at round 0. The server has advanced L rounds. Each round, about ${CHANGE_FRACTION * 100}% of resources change (at least one), and each changed resource has ${ITEMS_PER_CHANGE} of its 100 items modified. The client must bring all N resources current and its reconstructed state is checked against the server's (any mismatch aborts the run).\n\n`;
   md += `- **Bytes** are measured at a TCP proxy between client and server and include HTTP/2 framing and all headers, both directions. TCP and TLS handshakes are not included; the connection counts at the end of each section show where they would add cost.\n`;
   md += `- **Time** is wall clock with the proxy adding a ${RTT_MS} ms RTT and one RTT for each new TCP connection. It models latency, not bandwidth or server load. Median of ${REPS} runs. Connections are cold, as when an app resumes.\n`;
-  md += `- All delta protocols use the same JSON Patch generator and the same "snapshot if smaller" rule, so differences come from protocol framing, request count, and coalescing, not from the diff algorithm.\n\n`;
+  md += `- All delta protocols except real Braid use the same update generator: the smaller of a JSON Patch and a JSON Merge Patch, or the full document when neither is smaller (SYNC's rule). Differences between them therefore come from protocol framing, request count, and coalescing, not from the diff algorithm. Real Braid uses its own range patches.\n\n`;
   md += `## Protocols\n\n`;
   md += `- **GET (full)**: N plain GETs, HTTP/1.1, pool of ${H1_POOL} keep-alive connections.\n`;
   md += `- **GET + ETag**: as above with \`If-None-Match\`; unchanged resources return 304.\n`;
-  md += `- **Braid model H1 / H2**: my minimal model of draft-toomim-httpbis-braid-http-04 (per-resource \`GET\` with \`Parents\`, JSON Patch or 304). H2 is cleartext HTTP/2 with all N requests on one connection.\n`;
+  md += `- **Braid model H1 / H2**: my minimal model of draft-toomim-httpbis-braid-http-04 (per-resource \`GET\` with \`Parents\`, an update or 304). H2 is cleartext HTTP/2 with all N requests on one connection.\n`;
   md += `- **Braid real**: the \`braid-http\` library v${braidVersion} (\`braidify\` on the server, its \`fetch\` on the client), one \`GET\` with \`Parents\` per resource. Its Node client uses undici over HTTP/1.1 here (cleartext rules out HTTP/2 negotiation), so requests run on parallel connections.\n`;
   md += `- **Braid real mux**: the same library with subscriptions and its Multiplexing v1.0 extension forced on: one \`POST\` creates a multiplexer, then one \`GET\` per resource, with all responses carried on the multiplexer stream. The client stops once each resource is caught up (\`Current-Version\` or the first update).\n`;
   md += `- **Braid real, patch format**: Braid range patches (\`unit: json\`, a JSON Pointer range per changed item, as in draft-toomim-httpbis-range-patch-00), with the same "snapshot if smaller" rule. braid-http does not compress responses.\n`;
