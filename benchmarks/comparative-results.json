@@ -10,63 +10,63 @@
         "down": 21360,
         "requests": 1,
         "connections": 1,
-        "ms": 82.698958
+        "ms": 82.82279199999996
       },
       "GET + ETag": {
         "up": 92,
         "down": 21372,
         "requests": 1,
         "connections": 1,
-        "ms": 83.13366699999995
+        "ms": 83.426875
       },
       "Braid model H1": {
         "up": 87,
         "down": 1234,
         "requests": 1,
         "connections": 1,
-        "ms": 82.85654199999999
+        "ms": 82.64512500000001
       },
       "Braid model H2": {
         "up": 120,
         "down": 1187,
         "requests": 1,
         "connections": 1,
-        "ms": 85.27099999999996
+        "ms": 84.48512500000015
       },
       "Braid real": {
         "up": 194,
         "down": 1191,
         "requests": 1,
         "connections": 1,
-        "ms": 86.74595900000031
+        "ms": 87.39479099999971
       },
       "Braid real mux": {
         "up": 599,
         "down": 2876,
         "requests": 2,
         "connections": 2,
-        "ms": 87.72483300000022
+        "ms": 90.31754200000069
       },
       "Mercure model": {
         "up": 101,
         "down": 1291,
         "requests": 1,
         "connections": 1,
-        "ms": 82.98291700000027
+        "ms": 82.86804200000006
       },
       "Mercure real": {
         "up": 189,
         "down": 1708,
         "requests": 1,
         "connections": 1,
-        "ms": 86.77295800000047
+        "ms": 85.63595800000076
       },
       "SYNC": {
         "up": 197,
-        "down": 1395,
+        "down": 1387,
         "requests": 1,
         "connections": 1,
-        "ms": 83.04483299999993
+        "ms": 83.07250000000022
       }
     }
   },
@@ -81,63 +81,63 @@
         "down": 21413,
         "requests": 1,
         "connections": 1,
-        "ms": 82.12354099999993
+        "ms": 82.19266700000026
       },
       "GET + ETag": {
         "up": 92,
         "down": 21425,
         "requests": 1,
         "connections": 1,
-        "ms": 82.73999999999978
+        "ms": 82.16187499999978
       },
       "Braid model H1": {
         "up": 87,
         "down": 5344,
         "requests": 1,
         "connections": 1,
-        "ms": 83.19354199999998
+        "ms": 83.17737500000021
       },
       "Braid model H2": {
         "up": 120,
         "down": 5297,
         "requests": 1,
         "connections": 1,
-        "ms": 84.85220800000025
+        "ms": 84.25274999999965
       },
       "Braid real": {
         "up": 194,
         "down": 4571,
         "requests": 1,
         "connections": 1,
-        "ms": 85.06012499999997
+        "ms": 83.99725000000035
       },
       "Braid real mux": {
         "up": 599,
         "down": 8260,
         "requests": 2,
         "connections": 2,
-        "ms": 89.70512500000041
+        "ms": 91.01337500000045
       },
       "Mercure model": {
         "up": 101,
         "down": 5745,
         "requests": 1,
         "connections": 1,
-        "ms": 83.11254100000042
+        "ms": 84.55004100000042
       },
       "Mercure real": {
         "up": 189,
         "down": 6314,
         "requests": 1,
         "connections": 1,
-        "ms": 84.48166700000002
+        "ms": 87.14887500000077
       },
       "SYNC": {
         "up": 197,
-        "down": 5505,
+        "down": 5497,
         "requests": 1,
         "connections": 1,
-        "ms": 83.14837500000067
+        "ms": 83.9427080000005
       }
     }
   },
@@ -152,63 +152,63 @@
         "down": 21490,
         "requests": 1,
         "connections": 1,
-        "ms": 81.81212500000038
+        "ms": 82.50083300000006
       },
       "GET + ETag": {
         "up": 92,
         "down": 21503,
         "requests": 1,
         "connections": 1,
-        "ms": 81.78333399999974
+        "ms": 82.61845800000083
       },
       "Braid model H1": {
         "up": 87,
         "down": 19751,
         "requests": 1,
         "connections": 1,
-        "ms": 83.23454200000015
+        "ms": 83.77779200000077
       },
       "Braid model H2": {
         "up": 120,
         "down": 19713,
         "requests": 1,
         "connections": 1,
-        "ms": 86.0318329999991
+        "ms": 86.11729200000082
       },
       "Braid real": {
         "up": 194,
         "down": 16421,
         "requests": 1,
         "connections": 1,
-        "ms": 85.49445899999955
+        "ms": 87.4795839999988
       },
       "Braid real mux": {
         "up": 599,
         "down": 27125,
         "requests": 2,
         "connections": 2,
-        "ms": 91.07387500000004
+        "ms": 95.86308400000053
       },
       "Mercure model": {
         "up": 101,
         "down": 28002,
         "requests": 1,
         "connections": 1,
-        "ms": 86.30691699999807
+        "ms": 83.17912500000239
       },
       "Mercure real": {
         "up": 190,
         "down": 29315,
         "requests": 1,
         "connections": 1,
-        "ms": 87.06974999999875
+        "ms": 87.36341700000048
       },
       "SYNC": {
         "up": 197,
-        "down": 19911,
+        "down": 19903,
         "requests": 1,
         "connections": 1,
-        "ms": 83.67775000000256
+        "ms": 82.88187499999913
       }
     }
   },
@@ -223,63 +223,63 @@
         "down": 213743,
         "requests": 10,
         "connections": 6,
-        "ms": 125.57824999999866
+        "ms": 128.54329100000177
       },
       "GET + ETag": {
         "up": 920,
         "down": 65029,
         "requests": 10,
         "connections": 6,
-        "ms": 128.11645800000042
+        "ms": 125.9385829999992
       },
       "Braid model H1": {
         "up": 870,
         "down": 4707,
         "requests": 10,
         "connections": 6,
-        "ms": 127.90816600000107
+        "ms": 129.51950000000215
       },
       "Braid model H2": {
         "up": 309,
         "down": 3434,
         "requests": 10,
         "connections": 1,
-        "ms": 87.50058299999728
+        "ms": 88.06816600000093
       },
       "Braid real": {
         "up": 1940,
         "down": 5425,
         "requests": 10,
         "connections": 10,
-        "ms": 92.26429199999984
+        "ms": 91.80912499999977
       },
       "Braid real mux": {
         "up": 3722,
         "down": 12352,
         "requests": 11,
         "connections": 11,
-        "ms": 96.40116699999999
+        "ms": 95.20141700000022
       },
       "Mercure model": {
         "up": 236,
         "down": 3540,
         "requests": 1,
         "connections": 1,
-        "ms": 83.91441599999962
+        "ms": 81.08866699999999
       },
       "Mercure real": {
         "up": 631,
         "down": 4033,
         "requests": 1,
         "connections": 1,
-        "ms": 86.04862499999945
+        "ms": 83.11945800000103
       },
       "SYNC": {
         "up": 306,
-        "down": 3880,
+        "down": 3872,
         "requests": 1,
         "connections": 1,
-        "ms": 84.10645800000202
+        "ms": 80.62945800000307
       }
     }
   },
@@ -294,63 +294,63 @@
         "down": 213860,
         "requests": 10,
         "connections": 6,
-        "ms": 125.89687500000218
+        "ms": 123.18487499999901
       },
       "GET + ETag": {
         "up": 920,
         "down": 171456,
         "requests": 10,
         "connections": 6,
-        "ms": 127.30883300000278
+        "ms": 124.45491599999878
       },
       "Braid model H1": {
         "up": 870,
         "down": 17500,
         "requests": 10,
         "connections": 6,
-        "ms": 128.53495900000053
+        "ms": 123.42962499999703
       },
       "Braid model H2": {
         "up": 309,
         "down": 15960,
         "requests": 10,
         "connections": 1,
-        "ms": 87.24199999999837
+        "ms": 83.07429200000115
       },
       "Braid real": {
         "up": 1940,
         "down": 16121,
         "requests": 10,
         "connections": 10,
-        "ms": 92.43637500000114
+        "ms": 84.63004200000069
       },
       "Braid real mux": {
         "up": 3722,
         "down": 30705,
         "requests": 11,
         "connections": 11,
-        "ms": 101.96125000000029
+        "ms": 86.9273749999993
       },
       "Mercure model": {
         "up": 236,
         "down": 16941,
         "requests": 1,
         "connections": 1,
-        "ms": 85.44833400000061
+        "ms": 81.6002499999995
       },
       "Mercure real": {
         "up": 631,
         "down": 17884,
         "requests": 1,
         "connections": 1,
-        "ms": 87.15583299999707
+        "ms": 83.1653750000005
       },
       "SYNC": {
         "up": 306,
-        "down": 16544,
+        "down": 16536,
         "requests": 1,
         "connections": 1,
-        "ms": 86.48691699999836
+        "ms": 81.66941699999734
       }
     }
   },
@@ -365,63 +365,63 @@
         "down": 213965,
         "requests": 10,
         "connections": 6,
-        "ms": 125.80604200000016
+        "ms": 122.79937500000233
       },
       "GET + ETag": {
         "up": 920,
         "down": 214086,
         "requests": 10,
         "connections": 6,
-        "ms": 127.15754100000049
+        "ms": 123.02341700000034
       },
       "Braid model H1": {
         "up": 870,
         "down": 67563,
         "requests": 10,
         "connections": 6,
-        "ms": 126.9150419999969
+        "ms": 123.40445900000122
       },
       "Braid model H2": {
         "up": 322,
         "down": 65938,
         "requests": 10,
         "connections": 1,
-        "ms": 88.54904199999874
+        "ms": 86.26833299999998
       },
       "Braid real": {
         "up": 1940,
         "down": 57368,
         "requests": 10,
         "connections": 10,
-        "ms": 92.72395900000265
+        "ms": 98.265416000002
       },
       "Braid real mux": {
         "up": 3722,
         "down": 96993,
         "requests": 11,
         "connections": 11,
-        "ms": 107.25558399999863
+        "ms": 94.01270800000202
       },
       "Mercure model": {
         "up": 236,
         "down": 80354,
         "requests": 1,
         "connections": 1,
-        "ms": 91.75354099999822
+        "ms": 85.23295800000051
       },
       "Mercure real": {
         "up": 641,
         "down": 83406,
         "requests": 1,
         "connections": 1,
-        "ms": 98.33858300000429
+        "ms": 88.96949999999924
       },
       "SYNC": {
         "up": 306,
-        "down": 66554,
+        "down": 66546,
         "requests": 1,
         "connections": 1,
-        "ms": 88.62391700000444
+        "ms": 84.90370900000562
       }
     }
   },
@@ -436,63 +436,63 @@
         "down": 1068731,
         "requests": 50,
         "connections": 6,
-        "ms": 427.1812920000011
+        "ms": 431.9746249999953
       },
       "GET + ETag": {
         "up": 4640,
         "down": 261375,
         "requests": 50,
         "connections": 6,
-        "ms": 421.7265000000043
+        "ms": 419.81258300000627
       },
       "Braid model H1": {
         "up": 4390,
         "down": 20092,
         "requests": 50,
         "connections": 6,
-        "ms": 421.8469170000026
+        "ms": 424.86820799999987
       },
       "Braid model H2": {
         "up": 1189,
         "down": 13337,
         "requests": 50,
         "connections": 1,
-        "ms": 97.05074999999488
+        "ms": 101.13579200000095
       },
       "Braid real": {
         "up": 9740,
         "down": 24178,
         "requests": 50,
         "connections": 50,
-        "ms": 97.93504199999734
+        "ms": 106.01362499999959
       },
       "Braid real mux": {
         "up": 17642,
         "down": 54495,
         "requests": 51,
         "connections": 51,
-        "ms": 112.94604200000322
+        "ms": 111.85374999999476
       },
       "Mercure model": {
         "up": 876,
         "down": 13496,
         "requests": 1,
         "connections": 1,
-        "ms": 89.41104199999972
+        "ms": 90.11412500000006
       },
       "Mercure real": {
         "up": 2631,
         "down": 14328,
         "requests": 1,
         "connections": 1,
-        "ms": 89.2913750000007
+        "ms": 95.8804999999993
       },
       "SYNC": {
         "up": 826,
-        "down": 14912,
+        "down": 14904,
         "requests": 1,
         "connections": 1,
-        "ms": 90.16804099999717
+        "ms": 91.62358300000051
       }
     }
   },
@@ -507,63 +507,63 @@
         "down": 1068911,
         "requests": 50,
         "connections": 6,
-        "ms": 422.24404199999844
+        "ms": 428.6009999999951
       },
       "GET + ETag": {
         "up": 4640,
         "down": 878153,
         "requests": 50,
         "connections": 6,
-        "ms": 421.9226250000065
+        "ms": 434.4228340000045
       },
       "Braid model H1": {
         "up": 4390,
         "down": 70915,
         "requests": 50,
         "connections": 6,
-        "ms": 436.0571659999987
+        "ms": 438.72212500000023
       },
       "Braid model H2": {
         "up": 1202,
         "down": 62501,
         "requests": 50,
         "connections": 1,
-        "ms": 99.45729199999914
+        "ms": 106.3371249999982
       },
       "Braid real": {
         "up": 9740,
         "down": 66971,
         "requests": 50,
         "connections": 50,
-        "ms": 103.58029199999874
+        "ms": 102.27683300000353
       },
       "Braid real mux": {
         "up": 17642,
         "down": 130376,
         "requests": 51,
         "connections": 51,
-        "ms": 119.66395799999736
+        "ms": 126.02154199999495
       },
       "Mercure model": {
         "up": 876,
         "down": 67050,
         "requests": 1,
         "connections": 1,
-        "ms": 94.21166700000322
+        "ms": 86.20462499999849
       },
       "Mercure real": {
         "up": 2631,
         "down": 69658,
         "requests": 1,
         "connections": 1,
-        "ms": 96.35212499999761
+        "ms": 94.59558300000208
       },
       "SYNC": {
         "up": 826,
-        "down": 64981,
+        "down": 64973,
         "requests": 1,
         "connections": 1,
-        "ms": 97.72412500000064
+        "ms": 92.497749999995
       }
     }
   },
@@ -578,63 +578,63 @@
         "down": 1070443,
         "requests": 50,
         "connections": 6,
-        "ms": 425.2702499999941
+        "ms": 412.53870800000004
       },
       "GET + ETag": {
         "up": 4640,
         "down": 1071046,
         "requests": 50,
         "connections": 6,
-        "ms": 422.5295000000042
+        "ms": 407.40845799999806
       },
       "Braid model H1": {
         "up": 4390,
         "down": 281624,
         "requests": 50,
         "connections": 6,
-        "ms": 437.3973330000008
+        "ms": 448.7615829999995
       },
       "Braid model H2": {
         "up": 1280,
         "down": 272979,
         "requests": 50,
         "connections": 1,
-        "ms": 344.9492919999975
+        "ms": 355.0411249999961
       },
       "Braid real": {
         "up": 9740,
         "down": 240681,
         "requests": 50,
         "connections": 50,
-        "ms": 109.7308750000011
+        "ms": 114.27812500000437
       },
       "Braid real mux": {
         "up": 17642,
         "down": 409254,
         "requests": 51,
         "connections": 51,
-        "ms": 139.30895800000144
+        "ms": 157.34083300000202
       },
       "Mercure model": {
         "up": 876,
         "down": 317402,
         "requests": 1,
         "connections": 1,
-        "ms": 112.5633749999979
+        "ms": 125.3131249999933
       },
       "Mercure real": {
         "up": 2681,
         "down": 328113,
         "requests": 1,
         "connections": 1,
-        "ms": 149.68187500000204
+        "ms": 141.9897079999937
       },
       "SYNC": {
         "up": 826,
-        "down": 275452,
+        "down": 275444,
         "requests": 1,
         "connections": 1,
-        "ms": 101.20683400000416
+        "ms": 103.70808399999805
       }
     }
   },
@@ -649,63 +649,63 @@
         "down": 2137549,
         "requests": 100,
         "connections": 6,
-        "ms": 771.005459
+        "ms": 780.9512919999979
       },
       "GET + ETag": {
         "up": 9290,
         "down": 352741,
         "requests": 100,
         "connections": 6,
-        "ms": 755.1284169999999
+        "ms": 764.8525420000005
       },
       "Braid model H1": {
         "up": 8790,
         "down": 31382,
         "requests": 100,
         "connections": 6,
-        "ms": 760.7592909999948
+        "ms": 768.3104170000006
       },
       "Braid model H2": {
         "up": 2289,
         "down": 18195,
         "requests": 100,
         "connections": 1,
-        "ms": 100.22408300000825
+        "ms": 92.5777919999964
       },
       "Braid real": {
         "up": 19490,
         "down": 40866,
         "requests": 100,
         "connections": 100,
-        "ms": 103.54383400001097
+        "ms": 110.45008300000336
       },
       "Braid real mux": {
         "up": 35042,
         "down": 94403,
         "requests": 101,
         "connections": 101,
-        "ms": 122.42333299999882
+        "ms": 124.42170900000201
       },
       "Mercure model": {
         "up": 1676,
         "down": 17997,
         "requests": 1,
         "connections": 1,
-        "ms": 94.75066600000719
+        "ms": 94.88708299999416
       },
       "Mercure real": {
         "up": 5231,
         "down": 18977,
         "requests": 1,
         "connections": 1,
-        "ms": 99.7252909999952
+        "ms": 99.05837499999325
       },
       "SYNC": {
         "up": 1477,
-        "down": 20948,
+        "down": 20940,
         "requests": 1,
         "connections": 1,
-        "ms": 95.73566600000777
+        "ms": 96.17516700000851
       }
     }
   },
@@ -720,63 +720,63 @@
         "down": 2137872,
         "requests": 100,
         "connections": 6,
-        "ms": 790.3768750000017
+        "ms": 775.8518750000076
       },
       "GET + ETag": {
         "up": 9290,
         "down": 1479950,
         "requests": 100,
         "connections": 6,
-        "ms": 792.8432089999988
+        "ms": 769.0311250000086
       },
       "Braid model H1": {
         "up": 8790,
         "down": 125487,
         "requests": 100,
         "connections": 6,
-        "ms": 812.9362080000137
+        "ms": 797.8376669999998
       },
       "Braid model H2": {
         "up": 2328,
         "down": 109440,
         "requests": 100,
         "connections": 1,
-        "ms": 196.39333299999998
+        "ms": 204.13691599998856
       },
       "Braid real": {
         "up": 19490,
         "down": 120081,
         "requests": 100,
         "connections": 100,
-        "ms": 118.17008300000452
+        "ms": 117.31737499999872
       },
       "Braid real mux": {
         "up": 35042,
         "down": 234642,
         "requests": 101,
         "connections": 101,
-        "ms": 147.35341699999117
+        "ms": 138.0482500000071
       },
       "Mercure model": {
         "up": 1676,
         "down": 116315,
         "requests": 1,
         "connections": 1,
-        "ms": 105.10124999999243
+        "ms": 100.57833299999766
       },
       "Mercure real": {
         "up": 5231,
         "down": 120546,
         "requests": 1,
         "connections": 1,
-        "ms": 119.46004199999152
+        "ms": 116.4776669999992
       },
       "SYNC": {
         "up": 1477,
-        "down": 113676,
+        "down": 113668,
         "requests": 1,
         "connections": 1,
-        "ms": 104.58695799999987
+        "ms": 104.54708399999072
       }
     }
   },
@@ -791,63 +791,63 @@
         "down": 2139591,
         "requests": 100,
         "connections": 6,
-        "ms": 790.0178749999905
+        "ms": 781.4548749999958
       },
       "GET + ETag": {
         "up": 9290,
         "down": 2140794,
         "requests": 100,
         "connections": 6,
-        "ms": 793.4417089999915
+        "ms": 780.4428340000013
       },
       "Braid model H1": {
         "up": 8790,
         "down": 539034,
         "requests": 100,
         "connections": 6,
-        "ms": 829.4908339999965
+        "ms": 827.739625000002
       },
       "Braid model H2": {
         "up": 2471,
         "down": 521560,
         "requests": 100,
         "connections": 1,
-        "ms": 673.5359590000007
+        "ms": 647.8534590000054
       },
       "Braid real": {
         "up": 19490,
         "down": 461379,
         "requests": 100,
         "connections": 100,
-        "ms": 129.15837499999907
+        "ms": 128.2608340000006
       },
       "Braid real mux": {
         "up": 35042,
         "down": 786542,
         "requests": 101,
         "connections": 101,
-        "ms": 172.50712500000373
+        "ms": 180.56945799999812
       },
       "Mercure model": {
         "up": 1676,
         "down": 608558,
         "requests": 1,
         "connections": 1,
-        "ms": 122.71745899999223
+        "ms": 136.36208299999998
       },
       "Mercure real": {
         "up": 5331,
         "down": 628665,
         "requests": 1,
         "connections": 1,
-        "ms": 184.9550420000014
+        "ms": 222.68875000000116
       },
       "SYNC": {
         "up": 1477,
-        "down": 526414,
+        "down": 526406,
         "requests": 1,
         "connections": 1,
-        "ms": 135.25449999999546
+        "ms": 113.33883400000923
       }
     }
   },
@@ -862,63 +862,63 @@
         "down": 4808,
         "requests": 1,
         "connections": 1,
-        "ms": 83.34233300000778
+        "ms": 82.76787499999045
       },
       "GET + ETag": {
         "up": 671,
         "down": 4820,
         "requests": 1,
         "connections": 1,
-        "ms": 83.41166699999303
+        "ms": 84.00308299998869
       },
       "Braid model H1": {
         "up": 666,
         "down": 1234,
         "requests": 1,
         "connections": 1,
-        "ms": 82.89645899999596
+        "ms": 82.2009160000016
       },
       "Braid model H2": {
         "up": 524,
         "down": 1187,
         "requests": 1,
         "connections": 1,
-        "ms": 84.26975000000675
+        "ms": 84.34500000000116
       },
       "Braid real": {
         "up": 701,
         "down": 1191,
         "requests": 1,
         "connections": 1,
-        "ms": 82.31437500000175
+        "ms": 84.35095799999544
       },
       "Braid real mux": {
         "up": 1106,
         "down": 2876,
         "requests": 2,
         "connections": 2,
-        "ms": 86.66579199999978
+        "ms": 86.22570900000574
       },
       "Mercure model": {
         "up": 657,
         "down": 1291,
         "requests": 1,
         "connections": 1,
-        "ms": 84.61616600000707
+        "ms": 82.67474999999104
       },
       "Mercure real": {
         "up": 1046,
         "down": 1708,
         "requests": 1,
         "connections": 1,
-        "ms": 84.00116600000183
+        "ms": 85.00733399999444
       },
       "SYNC": {
         "up": 776,
-        "down": 714,
+        "down": 697,
         "requests": 1,
         "connections": 1,
-        "ms": 85.01704199999222
+        "ms": 82.3025420000049
       }
     }
   },
@@ -933,63 +933,63 @@
         "down": 4865,
         "requests": 1,
         "connections": 1,
-        "ms": 83.30762500000128
+        "ms": 82.67637499999546
       },
       "GET + ETag": {
         "up": 671,
         "down": 4877,
         "requests": 1,
         "connections": 1,
-        "ms": 84.45691599999554
+        "ms": 82.50999999999476
       },
       "Braid model H1": {
         "up": 666,
         "down": 1372,
         "requests": 1,
         "connections": 1,
-        "ms": 84.46300000000338
+        "ms": 83.80158299999312
       },
       "Braid model H2": {
         "up": 524,
         "down": 1296,
         "requests": 1,
         "connections": 1,
-        "ms": 85.55212499998743
+        "ms": 84.19133299999521
       },
       "Braid real": {
         "up": 701,
         "down": 4571,
         "requests": 1,
         "connections": 1,
-        "ms": 85.02095900000131
+        "ms": 83.52820799998881
       },
       "Braid real mux": {
         "up": 1106,
         "down": 8260,
         "requests": 2,
         "connections": 2,
-        "ms": 88.78362500001094
+        "ms": 87.19075000000885
       },
       "Mercure model": {
         "up": 657,
         "down": 5745,
         "requests": 1,
         "connections": 1,
-        "ms": 84.07537500000035
+        "ms": 82.86608399999386
       },
       "Mercure real": {
         "up": 1046,
         "down": 6314,
         "requests": 1,
         "connections": 1,
-        "ms": 87.54866699999548
+        "ms": 85.16449999999895
       },
       "SYNC": {
         "up": 776,
-        "down": 1483,
+        "down": 1465,
         "requests": 1,
         "connections": 1,
-        "ms": 84.33699999999953
+        "ms": 82.40016699999978
       }
     }
   },
@@ -1004,63 +1004,63 @@
         "down": 5040,
         "requests": 1,
         "connections": 1,
-        "ms": 85.1461660000059
+        "ms": 82.5206249999901
       },
       "GET + ETag": {
         "up": 671,
         "down": 5053,
         "requests": 1,
         "connections": 1,
-        "ms": 85.1652080000058
+        "ms": 82.10691699999734
       },
       "Braid model H1": {
         "up": 666,
         "down": 3762,
         "requests": 1,
         "connections": 1,
-        "ms": 83.93929200001003
+        "ms": 82.84416600000986
       },
       "Braid model H2": {
         "up": 524,
         "down": 3686,
         "requests": 1,
         "connections": 1,
-        "ms": 86.08929199998965
+        "ms": 84.30666600000404
       },
       "Braid real": {
         "up": 701,
         "down": 16421,
         "requests": 1,
         "connections": 1,
-        "ms": 85.26541700000234
+        "ms": 85.7255839999998
       },
       "Braid real mux": {
         "up": 1106,
         "down": 27125,
         "requests": 2,
         "connections": 2,
-        "ms": 93.27508399999351
+        "ms": 87.52808300001197
       },
       "Mercure model": {
         "up": 657,
         "down": 28002,
         "requests": 1,
         "connections": 1,
-        "ms": 86.73958300000231
+        "ms": 86.25174999999581
       },
       "Mercure real": {
         "up": 1047,
         "down": 29315,
         "requests": 1,
         "connections": 1,
-        "ms": 90.93325000000186
+        "ms": 92.14237500001036
       },
       "SYNC": {
         "up": 776,
-        "down": 3882,
+        "down": 3863,
         "requests": 1,
         "connections": 1,
-        "ms": 84.47266699999454
+        "ms": 83.37083299999358
       }
     }
   },
@@ -1075,63 +1075,63 @@
         "down": 48075,
         "requests": 10,
         "connections": 6,
-        "ms": 135.29129199999443
+        "ms": 136.08029199999874
       },
       "GET + ETag": {
         "up": 6710,
         "down": 15358,
         "requests": 10,
         "connections": 6,
-        "ms": 135.01045899999735
+        "ms": 128.23191600000428
       },
       "Braid model H1": {
         "up": 6660,
         "down": 3440,
         "requests": 10,
         "connections": 6,
-        "ms": 131.27324999999837
+        "ms": 129.03491699999722
       },
       "Braid model H2": {
         "up": 2720,
         "down": 2095,
         "requests": 10,
         "connections": 1,
-        "ms": 89.3102910000016
+        "ms": 86.82583300000988
       },
       "Braid real": {
         "up": 7010,
         "down": 5425,
         "requests": 10,
         "connections": 10,
-        "ms": 90.92520800000057
+        "ms": 88.81083299999591
       },
       "Braid real mux": {
         "up": 8792,
         "down": 12352,
         "requests": 11,
         "connections": 11,
-        "ms": 94.88345799999661
+        "ms": 94.06766700001026
       },
       "Mercure model": {
         "up": 792,
         "down": 3540,
         "requests": 1,
         "connections": 1,
-        "ms": 84.69404200000281
+        "ms": 84.72429199999897
       },
       "Mercure real": {
         "up": 1542,
         "down": 4033,
         "requests": 1,
         "connections": 1,
-        "ms": 85.28612499999872
+        "ms": 89.2390000000014
       },
       "SYNC": {
         "up": 885,
-        "down": 1128,
+        "down": 1112,
         "requests": 1,
         "connections": 1,
-        "ms": 87.0633339999913
+        "ms": 84.20920800000022
       }
     }
   },
@@ -1146,63 +1146,63 @@
         "down": 48241,
         "requests": 10,
         "connections": 6,
-        "ms": 134.94745800000965
+        "ms": 130.50254100000893
       },
       "GET + ETag": {
         "up": 6710,
         "down": 38979,
         "requests": 10,
         "connections": 6,
-        "ms": 133.79045800000313
+        "ms": 134.3849590000027
       },
       "Braid model H1": {
         "up": 6660,
         "down": 6681,
         "requests": 10,
         "connections": 6,
-        "ms": 134.2609999999986
+        "ms": 132.5662910000101
       },
       "Braid model H2": {
         "up": 2720,
         "down": 4805,
         "requests": 10,
         "connections": 1,
-        "ms": 90.66883399999642
+        "ms": 91.97691599999962
       },
       "Braid real": {
         "up": 7010,
         "down": 16121,
         "requests": 10,
         "connections": 10,
-        "ms": 92.3070000000007
+        "ms": 92.30704200000037
       },
       "Braid real mux": {
         "up": 8792,
         "down": 30705,
         "requests": 11,
         "connections": 11,
-        "ms": 99.57362500000454
+        "ms": 99.24758300000394
       },
       "Mercure model": {
         "up": 792,
         "down": 16941,
         "requests": 1,
         "connections": 1,
-        "ms": 86.70345900001121
+        "ms": 88.17758299999696
       },
       "Mercure real": {
         "up": 1542,
         "down": 17884,
         "requests": 1,
         "connections": 1,
-        "ms": 91.63249999999243
+        "ms": 90.86812500000815
       },
       "SYNC": {
         "up": 885,
-        "down": 3142,
+        "down": 3126,
         "requests": 1,
         "connections": 1,
-        "ms": 89.20758399998886
+        "ms": 86.4992920000077
       }
     }
   },
@@ -1217,63 +1217,63 @@
         "down": 48907,
         "requests": 10,
         "connections": 6,
-        "ms": 134.02983300000778
+        "ms": 133.80079100000148
       },
       "GET + ETag": {
         "up": 6710,
         "down": 49028,
         "requests": 10,
         "connections": 6,
-        "ms": 135.69004100000893
+        "ms": 137.31508299999405
       },
       "Braid model H1": {
         "up": 6660,
         "down": 16332,
         "requests": 10,
         "connections": 6,
-        "ms": 136.77062500000466
+        "ms": 138.03187500000058
       },
       "Braid model H2": {
         "up": 2720,
         "down": 14274,
         "requests": 10,
         "connections": 1,
-        "ms": 92.14299999998184
+        "ms": 96.49233400000958
       },
       "Braid real": {
         "up": 7010,
         "down": 57368,
         "requests": 10,
         "connections": 10,
-        "ms": 101.16049999999814
+        "ms": 96.49941699999908
       },
       "Braid real mux": {
         "up": 8792,
         "down": 96993,
         "requests": 11,
         "connections": 11,
-        "ms": 113.31308300001547
+        "ms": 114.96058300000732
       },
       "Mercure model": {
         "up": 792,
         "down": 80354,
         "requests": 1,
         "connections": 1,
-        "ms": 92.63737499999115
+        "ms": 92.75204200000735
       },
       "Mercure real": {
         "up": 1552,
         "down": 83406,
         "requests": 1,
         "connections": 1,
-        "ms": 110.57562499999767
+        "ms": 98.95374999998603
       },
       "SYNC": {
         "up": 885,
-        "down": 10656,
+        "down": 10637,
         "requests": 1,
         "connections": 1,
-        "ms": 90.70095800000126
+        "ms": 90.2177499999816
       }
     }
   },
@@ -1288,63 +1288,63 @@
         "down": 240324,
         "requests": 50,
         "connections": 6,
-        "ms": 472.3466250000056
+        "ms": 442.41870799998287
       },
       "GET + ETag": {
         "up": 33590,
         "down": 62666,
         "requests": 50,
         "connections": 6,
-        "ms": 444.71879199999967
+        "ms": 428.737374999997
       },
       "Braid model H1": {
         "up": 33340,
         "down": 16289,
         "requests": 50,
         "connections": 6,
-        "ms": 440.7835830000113
+        "ms": 425.0764579999959
       },
       "Braid model H2": {
         "up": 12520,
         "down": 9286,
         "requests": 50,
         "connections": 1,
-        "ms": 98.38708299997961
+        "ms": 97.4749170000141
       },
       "Braid real": {
         "up": 35090,
         "down": 24178,
         "requests": 50,
         "connections": 50,
-        "ms": 99.36808300000848
+        "ms": 106.79612500002258
       },
       "Braid real mux": {
         "up": 42992,
         "down": 54495,
         "requests": 51,
         "connections": 51,
-        "ms": 117.07733299999381
+        "ms": 115.23929199998383
       },
       "Mercure model": {
         "up": 1432,
         "down": 13496,
         "requests": 1,
         "connections": 1,
-        "ms": 90.21249999999418
+        "ms": 90.59937499999069
       },
       "Mercure real": {
         "up": 3782,
         "down": 14328,
         "requests": 1,
         "connections": 1,
-        "ms": 94.53412500000559
+        "ms": 95.82858299999498
       },
       "SYNC": {
         "up": 1405,
-        "down": 2619,
+        "down": 2603,
         "requests": 1,
         "connections": 1,
-        "ms": 92.86420899999212
+        "ms": 92.00999999998021
       }
     }
   },
@@ -1359,63 +1359,63 @@
         "down": 240958,
         "requests": 50,
         "connections": 6,
-        "ms": 472.9739169999957
+        "ms": 459.1105000000098
       },
       "GET + ETag": {
         "up": 33590,
         "down": 199339,
         "requests": 50,
         "connections": 6,
-        "ms": 468.3969159999979
+        "ms": 451.18141700001433
       },
       "Braid model H1": {
         "up": 33340,
         "down": 34871,
         "requests": 50,
         "connections": 6,
-        "ms": 457.1557090000133
+        "ms": 445.14970800001174
       },
       "Braid model H2": {
         "up": 12520,
         "down": 24976,
         "requests": 50,
         "connections": 1,
-        "ms": 108.35241700001643
+        "ms": 107.94208400000934
       },
       "Braid real": {
         "up": 35090,
         "down": 66971,
         "requests": 50,
         "connections": 50,
-        "ms": 102.93212499999208
+        "ms": 106.82116699998733
       },
       "Braid real mux": {
         "up": 42992,
         "down": 130376,
         "requests": 51,
         "connections": 51,
-        "ms": 133.62350000001607
+        "ms": 127.7055419999815
       },
       "Mercure model": {
         "up": 1432,
         "down": 67050,
         "requests": 1,
         "connections": 1,
-        "ms": 100.46154200000456
+        "ms": 98.75383299999521
       },
       "Mercure real": {
         "up": 3782,
         "down": 69658,
         "requests": 1,
         "connections": 1,
-        "ms": 106.20054200000595
+        "ms": 108.25941600001534
       },
       "SYNC": {
         "up": 1405,
-        "down": 9448,
+        "down": 9429,
         "requests": 1,
         "connections": 1,
-        "ms": 102.0005409999867
+        "ms": 96.82179200000246
       }
     }
   },
@@ -1430,63 +1430,63 @@
         "down": 243725,
         "requests": 50,
         "connections": 6,
-        "ms": 473.6082500000193
+        "ms": 461.21416599999066
       },
       "GET + ETag": {
         "up": 33590,
         "down": 244328,
         "requests": 50,
         "connections": 6,
-        "ms": 472.80791699999827
+        "ms": 465.99279099999694
       },
       "Braid model H1": {
         "up": 33340,
         "down": 71871,
         "requests": 50,
         "connections": 6,
-        "ms": 464.29770900000585
+        "ms": 460.10108299998683
       },
       "Braid model H2": {
         "up": 12533,
         "down": 60806,
         "requests": 50,
         "connections": 1,
-        "ms": 119.77733399998397
+        "ms": 114.65974999999162
       },
       "Braid real": {
         "up": 35090,
         "down": 240681,
         "requests": 50,
         "connections": 50,
-        "ms": 118.24837499999558
+        "ms": 111.91945799998939
       },
       "Braid real mux": {
         "up": 42992,
         "down": 409254,
         "requests": 51,
         "connections": 51,
-        "ms": 155.51345800000126
+        "ms": 142.57333300000755
       },
       "Mercure model": {
         "up": 1432,
         "down": 317402,
         "requests": 1,
         "connections": 1,
-        "ms": 121.52600000001257
+        "ms": 116.82087500000489
       },
       "Mercure real": {
         "up": 3832,
         "down": 328113,
         "requests": 1,
         "connections": 1,
-        "ms": 162.07824999999139
+        "ms": 133.45837499998743
       },
       "SYNC": {
         "up": 1405,
-        "down": 40215,
+        "down": 40185,
         "requests": 1,
         "connections": 1,
-        "ms": 106.73604099999648
+        "ms": 101.88120800000615
       }
     }
   },
@@ -1501,63 +1501,63 @@
         "down": 480611,
         "requests": 100,
         "connections": 6,
-        "ms": 847.2462499999965
+        "ms": 835.3649999999907
       },
       "GET + ETag": {
         "up": 67190,
         "down": 87767,
         "requests": 100,
         "connections": 6,
-        "ms": 785.6409579999745
+        "ms": 778.0517910000053
       },
       "Braid model H1": {
         "up": 66690,
         "down": 25707,
         "requests": 100,
         "connections": 6,
-        "ms": 792.9126249999972
+        "ms": 767.0026660000149
       },
       "Braid model H2": {
         "up": 24770,
         "down": 12140,
         "requests": 100,
         "connections": 1,
-        "ms": 107.55537499999627
+        "ms": 108.32270900000003
       },
       "Braid real": {
         "up": 70190,
         "down": 40866,
         "requests": 100,
         "connections": 100,
-        "ms": 110.10491699998965
+        "ms": 107.79712499998277
       },
       "Braid real mux": {
         "up": 85742,
         "down": 94403,
         "requests": 101,
         "connections": 101,
-        "ms": 122.09962500000256
+        "ms": 126.66179199999897
       },
       "Mercure model": {
         "up": 2232,
         "down": 17997,
         "requests": 1,
         "connections": 1,
-        "ms": 98.57683299999917
+        "ms": 93.71166599998833
       },
       "Mercure real": {
         "up": 6682,
         "down": 18977,
         "requests": 1,
         "connections": 1,
-        "ms": 103.13820799998939
+        "ms": 98.62583299999824
       },
       "SYNC": {
         "up": 2056,
-        "down": 3224,
+        "down": 3207,
         "requests": 1,
         "connections": 1,
-        "ms": 98.74895899998955
+        "ms": 96.59283399998094
       }
     }
   },
@@ -1572,63 +1572,63 @@
         "down": 481704,
         "requests": 100,
         "connections": 6,
-        "ms": 808.1608750000014
+        "ms": 829.3331250000047
       },
       "GET + ETag": {
         "up": 67190,
         "down": 337483,
         "requests": 100,
         "connections": 6,
-        "ms": 781.3644579999964
+        "ms": 803.783208000008
       },
       "Braid model H1": {
         "up": 66690,
         "down": 62408,
         "requests": 100,
         "connections": 6,
-        "ms": 791.2633749999804
+        "ms": 789.7327090000035
       },
       "Braid model H2": {
         "up": 24783,
         "down": 43721,
         "requests": 100,
         "connections": 1,
-        "ms": 99.17987500000163
+        "ms": 113.76483299999381
       },
       "Braid real": {
         "up": 70190,
         "down": 120081,
         "requests": 100,
         "connections": 100,
-        "ms": 105.493833000015
+        "ms": 114.90308400001959
       },
       "Braid real mux": {
         "up": 85742,
         "down": 234642,
         "requests": 101,
         "connections": 101,
-        "ms": 122.41595799999777
+        "ms": 148.56474999999045
       },
       "Mercure model": {
         "up": 2232,
         "down": 116315,
         "requests": 1,
         "connections": 1,
-        "ms": 107.73391700000502
+        "ms": 104.42370899999514
       },
       "Mercure real": {
         "up": 6682,
         "down": 120546,
         "requests": 1,
         "connections": 1,
-        "ms": 116.04175000000396
+        "ms": 114.22599999999511
       },
       "SYNC": {
         "up": 2056,
-        "down": 15002,
+        "down": 14982,
         "requests": 1,
         "connections": 1,
-        "ms": 109.90520899998955
+        "ms": 103.25520900002448
       }
     }
   },
@@ -1643,63 +1643,63 @@
         "down": 487374,
         "requests": 100,
         "connections": 6,
-        "ms": 846.9064160000125
+        "ms": 821.9104170000064
       },
       "GET + ETag": {
         "up": 67190,
         "down": 488577,
         "requests": 100,
         "connections": 6,
-        "ms": 837.046291000006
+        "ms": 830.5234579999815
       },
       "Braid model H1": {
         "up": 66690,
         "down": 139861,
         "requests": 100,
         "connections": 6,
-        "ms": 869.3445829999982
+        "ms": 829.6928330000082
       },
       "Braid model H2": {
         "up": 24809,
         "down": 117749,
         "requests": 100,
         "connections": 1,
-        "ms": 212.70812499997555
+        "ms": 215.88529199999175
       },
       "Braid real": {
         "up": 70190,
         "down": 461379,
         "requests": 100,
         "connections": 100,
-        "ms": 130.81662500000675
+        "ms": 126.6761669999978
       },
       "Braid real mux": {
         "up": 85742,
         "down": 786542,
         "requests": 101,
         "connections": 101,
-        "ms": 178.65066700000898
+        "ms": 179.3700420000241
       },
       "Mercure model": {
         "up": 2232,
         "down": 608558,
         "requests": 1,
         "connections": 1,
-        "ms": 134.83612500000163
+        "ms": 135.47054199999548
       },
       "Mercure real": {
         "up": 6782,
         "down": 628665,
         "requests": 1,
         "connections": 1,
-        "ms": 192.73112499999115
+        "ms": 194.31808299999102
       },
       "SYNC": {
         "up": 2056,
-        "down": 75459,
+        "down": 75436,
         "requests": 1,
         "connections": 1,
-        "ms": 123.60787499998696
+        "ms": 106.73804200001177
       }
     }
   }

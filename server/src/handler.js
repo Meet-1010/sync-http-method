@@ -1,8 +1,8 @@
 'use strict';
 
 const crypto = require('crypto');
-const { resolveSync, finalize, problem, MAX_BODY_BYTES } = require('./sync-handler');
-const { resolveLink } = require('./sync-core');
+const { resolveSync, finalize, problem, resultResponse, plansOf, resultTypeOf, gzipTag, acceptsGzip, MAX_BODY_BYTES, GZIP_MIN_BYTES } = require('./sync-handler');
+const { resolveLink, resolvePlanned } = require('./sync-core');
 const { createLinkCodec } = require('./links');
 const { representationBytes } = require('./formats');
 
@@ -45,14 +45,28 @@ function send(res, response, acceptEncoding, extraHeaders = {}, headOnly = false
   res.end(headOnly ? undefined : body);
 }
 
+// RFC 9110 Section 4.1 recommends supporting URIs of at least 8000 octets.
+const MAX_URI_LENGTH = 8000;
+
 function linkConfig(links) {
   if (!links) return null;
-  const { secret, path, minBytes = 1024, cacheControl = 'private, max-age=31536000, immutable' } = links;
+  const {
+    secret, path, minBytes = 1024, cacheControl = 'private, max-age=31536000, immutable',
+    redirect = true, maxUriLength = MAX_URI_LENGTH,
+  } = links;
   if (typeof path !== 'string' || !/^\/(?!\/)[\x21-\x7E]*$/.test(path) || path.endsWith('/')) {
     throw new Error('links.path must be an absolute path such as "/sync/updates"');
   }
   const codec = createLinkCodec(secret);
-  return { codec, path, minBytes, cacheControl, href: payload => `${path}/${codec.encode(payload)}` };
+  const href = payload => `${path}/${codec.encode(payload)}`;
+  return { codec, path, minBytes, cacheControl, href, shared: redirect ? { href, maxUriLength } : null };
+}
+
+// If-None-Match uses the weak comparison (RFC 9110 Section 13.1.2).
+function noneMatch(header, etag) {
+  if (!header) return false;
+  if (header.trim() === '*') return true;
+  return header.split(',').map(t => t.trim().replace(/^W\//, '')).includes(etag);
 }
 
 // Serves SYNC requests carried by QUERY (RFC 10008) and, as a fallback for paths
@@ -70,11 +84,17 @@ function linkConfig(links) {
 // missing or different Content-Type with 400 or 415 (RFC 10008 Section 2.1)
 // instead of passing them on.
 //
-// links: { secret, path, minBytes, cacheControl }. When a client sends
-// "links": true, updates of at least minBytes are returned as links under `path`
-// instead of inline. Each link names one immutable update, so shared caches can
-// keep it; GET on it is served here. cacheControl defaults to private; use
-// 'public, max-age=31536000, immutable' only for data that is the same for everyone.
+// links: { secret, path, minBytes, cacheControl, redirect, maxUriLength }. When a
+// client sends "links": true, updates of at least minBytes are returned as links
+// under `path` instead of inline. Each link names one immutable update, so shared
+// caches can keep it; GET on it is served here. When a client sends
+// "redirect": true (and redirect is not false here), the server answers
+// 303 (See Other) with the URI of the whole result, also under `path`: clients
+// sending the same request against the same state get the same URI, so a shared
+// cache serves all of them from one response (RFC 10008 Section 2.5). URIs longer
+// than maxUriLength (default 8000) are not used; the results are sent directly.
+// cacheControl defaults to private; use 'public, max-age=31536000, immutable' only
+// for data that is the same for everyone.
 function syncHandler({ store, cacheControl = 'no-store', allowPost = true, strict = false, links } = {}) {
   const lc = linkConfig(links);
 
@@ -106,33 +126,54 @@ function syncHandler({ store, cacheControl = 'no-store', allowPost = true, stric
       response = problem(500, 'Internal error');
     }
     const extra = { 'Accept-Query': ACCEPT_QUERY };
-    if (response.status === 200 || response.status === 204) extra['Cache-Control'] = cacheControl;
+    if (response.status === 200 || response.status === 204 || response.status === 303) extra['Cache-Control'] = cacheControl;
     send(res, response, req.headers['accept-encoding'], extra);
   };
 
+  // GET or HEAD of a link (one update) or of a shared result document.
   async function serveLink(req, res) {
     const id = pathOf(req).slice(lc.path.length + 1);
     const payload = lc.codec.decode(id);
     const headOnly = req.method === 'HEAD';
-    if (!payload) return send(res, problem(404, 'Unknown link'), '', {}, headOnly);
+    // A link is [resource, from, to, format]; a shared result is { m, a, l, c, q }.
+    if (!payload || (!Array.isArray(payload) && !Array.isArray(payload.q))) return send(res, problem(404, 'Unknown link'), '', {}, headOnly);
 
-    let content;
+    const context = { method: req.method, target: req.originalUrl || req.url, headers: req.headers };
+    let response;
     try {
-      content = await resolveLink(payload, { store, context: { method: req.method, target: req.originalUrl || req.url, headers: req.headers } });
+      response = Array.isArray(payload) ? await linkedUpdate(payload, context) : await sharedResults(payload, context);
     } catch (e) {
       console.error('SYNC store error:', e);
       return send(res, problem(500, 'Internal error'), '', {}, headOnly);
     }
-    if (!content) return send(res, problem(404, 'This update is no longer available'), '', {}, headOnly);
+    if (!response) return send(res, problem(404, 'This content is no longer available'), '', {}, headOnly);
 
+    // The content never changes, so its identifier serves as its entity tag.
     const etag = `"${crypto.createHash('sha256').update(id).digest('base64url').slice(0, 22)}"`;
-    const headers = { ETag: etag, 'Cache-Control': lc.cacheControl };
-    const inm = req.headers['if-none-match'];
-    if (inm && (inm.trim() === '*' || inm.split(',').map(s => s.trim()).includes(etag))) {
-      return send(res, { status: 304, headers, body: null }, '', {}, true);
+    const headers = { ...response.headers, ETag: etag, 'Cache-Control': lc.cacheControl };
+    // Compare with the representation this request selects: gzip-coded or not.
+    const coded = response.body.length >= GZIP_MIN_BYTES;
+    const selected = coded && acceptsGzip(req.headers['accept-encoding']) ? gzipTag(etag) : etag;
+    if (noneMatch(req.headers['if-none-match'], selected)) {
+      // A 304 carries the fields a 200 would have (RFC 9110 Section 15.4.5).
+      const notModified = { ETag: selected, 'Cache-Control': lc.cacheControl };
+      if (coded) notModified.Vary = 'Accept-Encoding';
+      return send(res, { status: 304, headers: notModified, body: null }, '', {}, true);
     }
+    send(res, { ...response, headers }, req.headers['accept-encoding'], {}, headOnly);
+  }
+
+  async function linkedUpdate(payload, context) {
+    const content = await resolveLink(payload, { store, context });
+    if (!content) return null;
     const body = content.patch ? Buffer.from(JSON.stringify(content.data)) : representationBytes(content);
-    send(res, { status: 200, headers: { ...headers, 'Content-Type': content.type }, body }, req.headers['accept-encoding'], {}, headOnly);
+    return { status: 200, headers: { 'Content-Type': content.type }, body };
+  }
+
+  async function sharedResults(payload, context) {
+    const results = await resolvePlanned(plansOf(payload), { store, context, accept: payload.a || undefined, links: payload.l ? lc : null });
+    if (!results) return null;
+    return resultResponse(results, resultTypeOf(payload), payload.c);
   }
 }
 

@@ -1,16 +1,16 @@
 'use strict';
 
 const zlib = require('zlib');
-const { computeResults, MAX_RESOURCES } = require('./sync-core');
+const { planResults, materializeAll, MAX_RESOURCES } = require('./sync-core');
 const { isVersion } = require('./versions');
-const { negotiate, encodeJson, encodeMultipart, JSON_RESULT } = require('./encode');
+const { negotiate, encodeJson, encodeMultipart, JSON_RESULT, MULTIPART } = require('./encode');
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_HEADER_BYTES = 16 * 1024;
 const GZIP_MIN_BYTES = 1024;
 
 const STATUS_TEXT = {
-  200: 'OK', 204: 'No Content', 304: 'Not Modified', 400: 'Bad Request', 404: 'Not Found', 406: 'Not Acceptable',
+  200: 'OK', 204: 'No Content', 303: 'See Other', 304: 'Not Modified', 400: 'Bad Request', 404: 'Not Found', 406: 'Not Acceptable',
   411: 'Length Required', 413: 'Content Too Large', 415: 'Unsupported Media Type', 422: 'Unprocessable Content',
   431: 'Request Header Fields Too Large', 500: 'Internal Server Error',
 };
@@ -79,10 +79,46 @@ function parseBaselineHeader(value) {
   return Object.keys(out).length ? out : null;
 }
 
+// Encodes results in the negotiated format, with the fields every result response carries.
+function resultResponse(results, resultType, consistentField) {
+  const headers = { 'Sync-Delta-Complete': '?1' };
+  if (consistentField) headers['Sync-Consistent'] = consistentField;
+  if (resultType === JSON_RESULT) return { status: 200, headers: { ...headers, 'Content-Type': JSON_RESULT }, body: encodeJson(results) };
+  const { body, contentType } = encodeMultipart(results);
+  return { status: 200, headers: { ...headers, 'Content-Type': contentType }, body };
+}
+
+// A shared result document: everything needed to rebuild the response from the
+// versions alone. m: result format; a: accept list; l: links allowed; c:
+// Sync-Consistent value ('' when not requested); q: [resource, status, from, to,
+// baseline] per resource.
+function sharedPayload(planned, resultType, accept, linksAllowed, consistentField) {
+  return {
+    m: resultType === JSON_RESULT ? 'j' : 'm',
+    a: accept || null,
+    l: linksAllowed,
+    c: consistentField,
+    q: planned.map(({ resource, plan }) => [resource, plan.status, plan.from ?? null, plan.to ?? null, plan.baseline ?? null]),
+  };
+}
+
+const plansOf = payload => payload.q.map(([resource, status, from, to, baseline]) => {
+  const plan = { status };
+  if (status === 200 || status === 304) plan.to = to;
+  if (status === 200) plan.from = from;
+  if (baseline) plan.baseline = baseline;
+  return { resource, plan };
+});
+const resultTypeOf = payload => (payload.m === 'j' ? JSON_RESULT : MULTIPART);
+
 // Pure protocol step: request content + headers in, a complete response out
 // ({ status, headers, body }), before content coding.
 // Status codes follow RFC 10008 Section 2.1: content that is not valid JSON is 400,
 // valid JSON that does not describe a valid request is 422.
+//
+// links: { href, minBytes, shared: { href, maxUriLength } | null } enables links
+// and, when the client allows it with "redirect": true, 303 (See Other) to a
+// shared result document (RFC 10008 Section 2.5).
 async function resolveSync(bodyStr, headers = {}, { store, context, links } = {}) {
   const headerValue = headers['sync-baseline'];
   let request;
@@ -116,41 +152,73 @@ async function resolveSync(bodyStr, headers = {}, { store, context, links } = {}
   if (accept !== undefined && (!Array.isArray(accept) || !accept.every(a => typeof a === 'string'))) {
     return problem(422, 'accept must be an array of media types');
   }
-  for (const flag of ['recover', 'consistent', 'links']) {
+  for (const flag of ['recover', 'consistent', 'links', 'redirect']) {
     if (request[flag] !== undefined && typeof request[flag] !== 'boolean') return problem(422, `${flag} must be a boolean`);
   }
 
   const resultType = negotiate(headers.accept);
   if (!resultType) return problem(406, 'Acceptable result formats: application/sync-result+json, multipart/mixed');
 
-  const { results, allUnchanged, consistent } = await computeResults(baselines, {
-    accept: accept && accept.map(a => a.toLowerCase()),
+  const normalizedAccept = accept && accept.map(a => a.toLowerCase());
+  const { planned, allUnchanged, consistent } = await planResults(baselines, {
     recover: request.recover !== false,
     consistent: request.consistent === true,
-    links: request.links === true && links ? links : null,
     store,
     context,
   });
+  const consistentField = request.consistent === true ? (consistent ? '?1' : '?0') : '';
 
-  const out = { 'Sync-Delta-Complete': '?1', Vary: 'Accept' };
-  if (request.consistent === true) out['Sync-Consistent'] = consistent ? '?1' : '?0';
-  if (allUnchanged) return { status: 204, headers: out, body: null };
-
-  if (resultType === JSON_RESULT) {
-    return { status: 200, headers: { ...out, 'Content-Type': JSON_RESULT }, body: encodeJson(results) };
+  if (allUnchanged) {
+    const out = { 'Sync-Delta-Complete': '?1', Vary: 'Accept' };
+    if (consistentField) out['Sync-Consistent'] = consistentField;
+    return { status: 204, headers: out, body: null };
   }
-  const { body, contentType } = encodeMultipart(results);
-  return { status: 200, headers: { ...out, 'Content-Type': contentType }, body };
+
+  // The results as a resource of their own, which every client sending the same
+  // request against the same state is redirected to, and shared caches can store.
+  if (request.redirect === true && links?.shared) {
+    const location = links.shared.href(sharedPayload(planned, resultType, normalizedAccept, request.links === true, consistentField));
+    if (location.length <= links.shared.maxUriLength) {
+      return { status: 303, headers: { Location: location, Vary: 'Accept' }, body: null };
+    }
+  }
+
+  const results = materializeAll(planned, {
+    store,
+    accept: normalizedAccept,
+    links: request.links === true && links ? links : null,
+  });
+  const response = resultResponse(results, resultType, consistentField);
+  response.headers.Vary = 'Accept';
+  return response;
 }
 
-// Applies content coding and framing headers.
+// Whether a client accepts gzip (RFC 9110 Section 12.5.3; "gzip;q=0" refuses it).
+function acceptsGzip(acceptEncoding) {
+  for (const range of String(acceptEncoding || '').split(',')) {
+    const [coding, ...params] = range.split(';').map(s => s.trim().toLowerCase());
+    if (coding !== 'gzip' && coding !== 'x-gzip') continue;
+    const q = params.map(p => /^q=([0-9.]+)$/.exec(p)).find(Boolean);
+    return !q || Number(q[1]) > 0;
+  }
+  return false;
+}
+
+// The entity tag of the gzip-coded form of a representation: a different
+// representation, so a different strong validator (RFC 9110 Section 8.8.3).
+const gzipTag = etag => etag.replace(/"$/, '-gzip"');
+
+// Applies content coding and framing headers. Responses whose coding depends on
+// Accept-Encoding say so in Vary, whether or not this one was compressed.
 function finalize(response, acceptEncoding) {
   const headers = { ...response.headers };
   let body = response.body || Buffer.alloc(0);
-  if (body.length >= GZIP_MIN_BYTES && /\bgzip\b/i.test(acceptEncoding || '')) {
+  const compressible = body.length >= GZIP_MIN_BYTES;
+  if (compressible) headers.Vary = headers.Vary ? `${headers.Vary}, Accept-Encoding` : 'Accept-Encoding';
+  if (compressible && acceptsGzip(acceptEncoding)) {
     body = zlib.gzipSync(body);
     headers['Content-Encoding'] = 'gzip';
-    headers.Vary = headers.Vary ? `${headers.Vary}, Accept-Encoding` : 'Accept-Encoding';
+    if (headers.ETag) headers.ETag = gzipTag(headers.ETag);
   }
   headers['Content-Length'] = body.length;
   return { status: response.status, headers, body };
@@ -182,6 +250,6 @@ async function processSync(socket, bodyStr, headers = {}, keepAlive = false, sto
 }
 
 module.exports = {
-  processSync, resolveSync, finalize, problem, sendProblem, parseBaselineHeader, isResourceName,
-  MAX_BODY_BYTES, MAX_HEADER_BYTES, STATUS_TEXT,
+  processSync, resolveSync, resultResponse, plansOf, resultTypeOf, finalize, gzipTag, acceptsGzip, problem, sendProblem, parseBaselineHeader, isResourceName,
+  MAX_BODY_BYTES, MAX_HEADER_BYTES, GZIP_MIN_BYTES, STATUS_TEXT,
 };

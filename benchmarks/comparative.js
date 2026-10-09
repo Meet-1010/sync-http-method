@@ -7,37 +7,23 @@
 
 const http = require('http');
 const http2 = require('http2');
-const net = require('net');
 const zlib = require('zlib');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
-const crypto = require('crypto');
 const { braidify, fetch: braidFetch } = require('braid-http');
 
 const { syncHandler, createMemoryStore } = require('../server/src/package');
-const { buildUpdate, JSON_PATCH } = require('../server/src/formats');
-
-// The models and Mercure events carry a JSON Patch, or the full document as
-// application/json when that is not larger (the same rule SYNC uses).
-function delta(oldData, newData) {
-  const u = buildUpdate({ type: 'application/json', data: oldData }, { type: 'application/json', data: newData }, [JSON_PATCH]);
-  return u.full ? { format: 'application/json', data: newData } : u;
-}
-
-// Apply an update from a system that carries no SYNC versions (the models, Mercure).
-function applyUpdate(local, format, data) {
-  return format === 'application/json'
-    ? data
-    : applyResult(local, 'x', { status: 200, from: 'x', to: 'y', format, data });
-}
+const { startProxy } = require('./lib/proxy');
+const { buildHistories, entryAt, clone, CHANGE_FRACTION, ITEMS_PER_CHANGE } = require('./lib/dataset');
+const { braidUpdate, applyBraid } = require('./lib/braid');
+const { delta, applyUpdate } = require('./lib/updates');
+const {
+  MERCURE_URL, MERCURE_SUBSCRIBER_KEY, mercureToken, mercureAvailable, mercureSetup,
+} = require('./lib/mercure');
 const { syncRequest } = require('../client/src/sync-client');
 const { applyResult } = require('../client/src/apply');
 
-const ITEMS = 100;
-const MAX_ROUNDS = 25;
-const CHANGE_FRACTION = 0.2;
-const ITEMS_PER_CHANGE = 3;
 const RTT_MS = 40;
 const REPS = 3;
 const NS = [1, 10, 50, 100];
@@ -62,11 +48,9 @@ const PROFILES = {
   },
 };
 
+
 // Real third-party software: braid-http (npm) and the Mercure hub (Docker image dunglas/mercure),
 // started with the command in benchmarks/README.md. Without a reachable hub, its column is skipped.
-const MERCURE_URL = process.env.MERCURE_URL || 'http://127.0.0.1:3480';
-const MERCURE_PUBLISHER_KEY = process.env.MERCURE_PUBLISHER_KEY || 'bench-publisher-secret-key-0123456789abcdef';
-const MERCURE_SUBSCRIBER_KEY = process.env.MERCURE_SUBSCRIBER_KEY || 'bench-subscriber-secret-key-0123456789abcdef';
 
 const PROTOCOLS = [
   ['GET (full)', 'getFull'],
@@ -80,114 +64,7 @@ const PROTOCOLS = [
   ['SYNC', 'sync'],
 ];
 
-// ── Dataset ──────────────────────────────────────────────────────────────────
 
-function rng(seed) {
-  let a = seed;
-  return () => {
-    a |= 0; a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-const WORDS = ('account update message report session product design review budget meeting deploy server client '
-  + 'network cache release feature planning customer invoice payment shipping order status archive profile settings '
-  + 'notification schedule calendar document template workflow analytics dashboard export import backup restore '
-  + 'security audit policy token request response latency throughput queue worker cluster region storage index '
-  + 'search filter sort render layout theme font image video audio stream upload download share comment reply '
-  + 'mention thread channel project task sprint ticket issue branch merge commit build test pipeline monitor alert').split(' ');
-
-// Seeded text so bodies have realistic (not trivially compressible) entropy.
-function makeBody(id, rev) {
-  const r = rng(id * 7919 + rev * 104729 + 17);
-  return Array.from({ length: 14 }, () => WORDS[Math.floor(r() * WORDS.length)]).join(' ');
-}
-
-const makeItem = (id, rev) => ({
-  id,
-  title: `Post ${id}: ${makeBody(id, rev).split(' ').slice(0, 3).join(' ')}`,
-  body: makeBody(id, rev),
-  likes: rev * 3 + (id % 7),
-  updated: `2026-10-05T10:${String(rev % 60).padStart(2, '0')}:00Z`,
-});
-
-const clone = v => JSON.parse(JSON.stringify(v));
-
-// history[i] = [{ round, token, data }, ...]; a resource only gets a new entry in rounds where it changed.
-function buildHistories(N) {
-  const rand = rng(1000 + N);
-  const history = [];
-  for (let i = 0; i < N; i++) {
-    const data = {};
-    for (let id = 1; id <= ITEMS; id++) data[id] = makeItem(id, 0);
-    history.push([{ round: 0, token: 'v0', data }]);
-  }
-  for (let r = 1; r <= MAX_ROUNDS; r++) {
-    for (let i = 0; i < N; i++) {
-      if (i !== r % N && rand() >= CHANGE_FRACTION) continue;
-      const last = history[i][history[i].length - 1];
-      const data = clone(last.data);
-      const picked = new Set();
-      while (picked.size < ITEMS_PER_CHANGE) picked.add(1 + Math.floor(rand() * ITEMS));
-      for (const id of picked) data[id] = makeItem(id, r);
-      history[i].push({ round: r, token: `v${history[i].length}`, data });
-    }
-  }
-  return history;
-}
-
-const entryAt = (h, L) => h.filter(e => e.round <= L).pop();
-
-// ── Latency + byte-counting TCP proxy ────────────────────────────────────────
-
-function startProxy(targetPort, oneWayMs) {
-  const stats = { up: 0, down: 0, connections: 0 };
-  const sockets = new Set();
-
-  // Strict FIFO per direction: independent timers with equal deadlines may fire out of order.
-  function pipe(from, to, key, handshake) {
-    const queue = [];
-    let last = 0;
-    let first = true;
-    let timer = null;
-
-    const pump = () => {
-      if (timer || !queue.length) return;
-      timer = setTimeout(() => {
-        timer = null;
-        queue.shift().fn();
-        pump();
-      }, Math.max(0, queue[0].at - performance.now()));
-    };
-    const schedule = fn => {
-      let at = performance.now() + oneWayMs + (first && handshake ? 2 * oneWayMs : 0);
-      first = false;
-      if (at < last) at = last;
-      last = at;
-      queue.push({ at, fn });
-      pump();
-    };
-    from.on('data', c => { stats[key] += c.length; schedule(() => { if (!to.destroyed) to.write(c); }); });
-    from.on('end', () => schedule(() => { if (!to.destroyed) to.end(); }));
-    from.on('error', () => to.destroy());
-  }
-
-  const srv = net.createServer(client => {
-    stats.connections++;
-    const upstream = net.connect(targetPort, '127.0.0.1');
-    sockets.add(client); sockets.add(upstream);
-    pipe(client, upstream, 'up', true);
-    pipe(upstream, client, 'down', false);
-  });
-
-  return new Promise(resolve => srv.listen(0, '127.0.0.1', () => resolve({
-    port: srv.address().port,
-    stats,
-    close: () => new Promise(res => { for (const s of sockets) s.destroy(); srv.close(res); }),
-  })));
-}
 
 // ── Servers ──────────────────────────────────────────────────────────────────
 
@@ -266,15 +143,6 @@ const close = (srv) => new Promise(r => srv.close(r));
 
 // ── Real Braid server (braid-http) and Mercure hub helpers ──────────────────
 
-function braidUpdate(base, cur) {
-  const keys = Object.keys(cur.data).filter(k => JSON.stringify(base.data[k]) !== JSON.stringify(cur.data[k]));
-  // JSON ranges are JSON Pointers, as in draft-toomim-httpbis-range-patch-00 ("Content-Range: json /foo/bar/3").
-  const patches = keys.map(k => ({ unit: 'json', range: `/${k.replace(/~/g, '~0').replace(/\//g, '~1')}`, content: JSON.stringify(cur.data[k]) }));
-  const patchBytes = patches.reduce((n, p) => n + p.range.length + p.content.length, 0);
-  const snapshot = JSON.stringify(cur.data);
-  return patchBytes < snapshot.length ? { patches } : { body: snapshot };
-}
-
 function makeBraidHandler(ctx) {
   return (req, res) => {
     const i = Number(req.url.split('/')[2]);
@@ -294,68 +162,6 @@ function makeBraidHandler(ctx) {
     res.sendUpdate({ version: [cur.token], parents: [parent], ...braidUpdate(base, cur) });
     if (!req.subscribe) res.end();
   };
-}
-
-function applyBraid(local, update) {
-  const text = v => (typeof v === 'string' ? v : Buffer.from(v).toString('utf8'));
-  if (update.patches) {
-    const out = clone(local);
-    for (const p of update.patches) {
-      const key = p.range.slice(1).replace(/~1/g, '/').replace(/~0/g, '~');
-      out[key] = JSON.parse(p.content_text ?? text(p.content));
-    }
-    return out;
-  }
-  return JSON.parse(update.body_text ?? text(update.body));
-}
-
-function mercureToken(action, audience, key) {
-  const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
-  const now = Math.floor(Date.now() / 1000);
-  const h = b64({ alg: 'HS256', typ: 'at+jwt' });
-  const p = b64({
-    iss: 'https://localhost', aud: audience, sub: 'bench', client_id: 'bench', iat: now, exp: now + 3600, jti: crypto.randomUUID(),
-    authorization_details: [{ type: 'https://mercure.rocks/authorization-detail', actions: [action], topics: [{ match: '*' }] }],
-  });
-  return `${h}.${p}.${crypto.createHmac('sha256', key).update(`${h}.${p}`).digest('base64url')}`;
-}
-
-async function mercurePublish(topic, data) {
-  const res = await fetch(`${MERCURE_URL}/.well-known/mercure`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${mercureToken('publish', `${MERCURE_URL}/.well-known/mercure`, MERCURE_PUBLISHER_KEY)}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({ topic, data }),
-  });
-  if (res.status !== 200) throw new Error(`Mercure publish failed: ${res.status}`);
-  return res.text();
-}
-
-async function mercureAvailable() {
-  try {
-    return (await fetch(MERCURE_URL, { signal: AbortSignal.timeout(1500) })).status === 200;
-  } catch {
-    return false;
-  }
-}
-
-// Publishes this configuration's history to the hub; the subscriber later resumes from the marker.
-async function mercureSetup(ctx, prefix) {
-  const topic = i => `${prefix}/r/${i}`;
-  const marker = await mercurePublish(`${prefix}/marker`, 'start');
-  let count = 0;
-  for (let r = 1; r <= ctx.L; r++) {
-    for (let i = 0; i < ctx.N; i++) {
-      const idx = ctx.history[i].findIndex(e => e.round === r);
-      if (idx < 1) continue;
-      const u = delta(ctx.history[i][idx - 1].data, ctx.history[i][idx].data);
-      await mercurePublish(topic(i), JSON.stringify({ topic: i, format: u.format, data: u.data }));
-      count++;
-    }
-  }
-  return { marker, count, topic };
 }
 
 // ── Clients ──────────────────────────────────────────────────────────────────

@@ -58,11 +58,15 @@ async function resolveLinks(results, baseUrl, fetchImpl, headers, signal) {
 //            'query', 'post', or 'method' (the dedicated SYNC method).
 // result: 'json' (default) or 'multipart'.
 // links: true lets the server return links for large updates; they are fetched here.
+// redirect: true lets the server answer 303 (See Other) with the URI of the whole
+//            result, which shared caches can serve to every client in the same state;
+//            it is followed here (fetch follows it itself), and if that URI fails the
+//            request is repeated without redirect.
 // consistent: true asks for all resources to be read at one instant (see the
 //            Sync-Consistent response field).
 async function syncFetch(url, baselines, {
   fetch: fetchImpl = globalThis.fetch, transport = 'auto', result = 'json',
-  accept, recover, consistent, links, headers, signal,
+  accept, recover, consistent, links, redirect, headers, signal,
 } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('No fetch implementation available; pass { fetch }');
   if (!ACCEPT[result]) throw new Error(`Unknown result format ${result}`);
@@ -72,15 +76,30 @@ async function syncFetch(url, baselines, {
   if (recover === false) payload.recover = false;
   if (consistent) payload.consistent = true;
   if (links) payload.links = true;
+  if (redirect) payload.redirect = true;
   const body = JSON.stringify(payload);
+  const { redirect: _, ...direct } = payload;
 
-  const send = async method => {
-    const res = await fetchImpl(base.toString(), {
+  const send = async (method, content = body, again = false) => {
+    let res = await fetchImpl(base.toString(), {
       method,
       headers: { 'Content-Type': SYNC_TYPE, Accept: ACCEPT[result], ...headers },
-      body,
+      body: content,
       signal,
     });
+    let redirected = res.redirected;
+    // fetch follows 303 with GET itself; this covers implementations that return it.
+    const location = res.status === 303 && res.headers.get('location');
+    if (location) {
+      await res.arrayBuffer();
+      res = await fetchImpl(new URL(location, base).toString(), { headers: { Accept: ACCEPT[result], ...headers }, signal });
+      redirected = true;
+    }
+    // A shared result that is no longer available: ask once more for a direct answer.
+    if (redirected && res.status !== 200 && !again) {
+      await res.arrayBuffer();
+      return send(method, JSON.stringify(direct), true);
+    }
     return { status: res.status, headers: res.headers, body: await readBody(res), transport: method };
   };
 
@@ -188,14 +207,16 @@ class SyncClient {
 
     const retry = await round(list);
     if (retry.length) {
-      // Ask again from scratch, inline: the server sends full representations.
+      // Ask again from scratch, directly and inline: the server sends full representations.
+      const direct = { links: false, redirect: false };
       for (const r of retry) this.entries.delete(r);
-      const stillFailing = await round(retry, { links: false });
+      const stillFailing = await round(retry, direct);
       if (stillFailing.length) throw new SyncError(409, null, `Could not synchronize ${stillFailing.join(', ')}`);
       if (consistent) {
         // The retried resources came from a later instant; read everything again so
         // the values returned belong together.
-        await round(list, { links: false });
+        const failing = await round(list, direct);
+        if (failing.length) throw new SyncError(409, null, `Could not synchronize ${failing.join(', ')} consistently`);
       }
     }
 

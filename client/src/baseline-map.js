@@ -1,6 +1,6 @@
 'use strict';
 
-// Tracks the opaque version token the client holds for each resource.
+// Tracks the version the client holds for each resource (an identifier or a set of identifiers).
 class BaselineMap {
   constructor(initial = {}) {
     this._state = { ...initial };
@@ -10,15 +10,15 @@ class BaselineMap {
     return this._state[resource] ?? null;
   }
 
-  set(resource, token) {
-    this._state[resource] = token;
+  set(resource, version) {
+    this._state[resource] = version;
   }
 
   toJSON() {
     return { ...this._state };
   }
 
-  // Advance tokens for every resource the server answered with 200 or 304.
+  // Advance the version of every resource the server answered with 200 or 304.
   applyResults(responseBody) {
     if (!responseBody || !responseBody.results) return;
     for (const [resource, result] of Object.entries(responseBody.results)) {

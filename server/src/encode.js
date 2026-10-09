@@ -97,16 +97,25 @@ function partFor(resource, r) {
   return { head: headers.join('\r\n'), body };
 }
 
+// The boundary is derived from the parts, so the same results always encode to the
+// same octets (as a strong entity tag requires), and is checked against every part.
+function chooseBoundary(parts, seed) {
+  for (;;) {
+    const boundary = `sync-${seed.subarray(0, 18).toString('base64url')}`;
+    if (!parts.some(p => p.body.includes(boundary) || p.head.includes(boundary))) return boundary;
+    seed = crypto.createHash('sha256').update(seed).digest();
+  }
+}
+
 function encodeMultipart(results) {
   const parts = Object.entries(results).map(([resource, r]) => partFor(resource, r));
-  let boundary;
-  do {
-    boundary = `sync-${crypto.randomBytes(12).toString('base64url')}`;
-  } while (parts.some(p => p.body.includes(boundary)));
+  const hash = crypto.createHash('sha256');
+  for (const p of parts) hash.update(p.head).update('\0').update(p.body).update('\0');
+  const boundary = chooseBoundary(parts, hash.digest());
   const chunks = [];
   for (const p of parts) chunks.push(Buffer.from(`--${boundary}\r\n${p.head}\r\n\r\n`), p.body, Buffer.from('\r\n'));
   chunks.push(Buffer.from(`--${boundary}--\r\n`));
   return { body: Buffer.concat(chunks), contentType: `${MULTIPART}; boundary="${boundary}"` };
 }
 
-module.exports = { JSON_RESULT, MULTIPART, negotiate, encodeJson, encodeMultipart, sfString, parseAccept };
+module.exports = { JSON_RESULT, MULTIPART, negotiate, encodeJson, encodeMultipart, chooseBoundary, sfString, parseAccept };

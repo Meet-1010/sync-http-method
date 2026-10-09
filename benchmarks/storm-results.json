@@ -1,0 +1,203 @@
+{
+  "K": 100,
+  "N": 50,
+  "L": 5,
+  "scenarios": [
+    {
+      "scenario": "same",
+      "name": "Same state: every client was current at round 0",
+      "distinctStates": 1,
+      "rows": [
+        {
+          "label": "GET (full), via shared cache",
+          "clientRequests": 5000,
+          "clientBytes": 107500150,
+          "retries": 0,
+          "durationMs": 1375.715708,
+          "p50": 399.0295830000001,
+          "p95": 817.651709,
+          "originRequests": 50,
+          "originBytes": 1070840,
+          "originCpuMs": 10.740000000000009,
+          "updatesComputed": 0
+        },
+        {
+          "label": "Braid (braid-http), via shared cache",
+          "clientRequests": 5000,
+          "clientBytes": 7400950,
+          "retries": 0,
+          "durationMs": 1442.2617500000001,
+          "p50": 522.566125,
+          "p95": 959.4453750000001,
+          "originRequests": 50,
+          "originBytes": 67300,
+          "originCpuMs": 17.504000000000005,
+          "updatesComputed": 41
+        },
+        {
+          "label": "SYNC, inline",
+          "clientRequests": 100,
+          "clientBytes": 6582100,
+          "retries": 0,
+          "durationMs": 1079.6155,
+          "p50": 93.69337499999995,
+          "p95": 106.80074999999988,
+          "originRequests": 100,
+          "originBytes": 6500229,
+          "originCpuMs": 48.41499999999999,
+          "updatesComputed": 41
+        },
+        {
+          "label": "SYNC, links via shared cache",
+          "clientRequests": 4200,
+          "clientBytes": 8951541,
+          "retries": 0,
+          "durationMs": 1499.6047919999999,
+          "p50": 520.376416,
+          "p95": 907.783833,
+          "originRequests": 141,
+          "originBytes": 769473,
+          "originCpuMs": 55.95400000000001,
+          "updatesComputed": 41
+        },
+        {
+          "label": "SYNC, shared result (303) via shared cache",
+          "clientRequests": 200,
+          "clientBytes": 6699501,
+          "retries": 0,
+          "durationMs": 1180.68675,
+          "p50": 182.64541699999995,
+          "p95": 237.02537499999994,
+          "originRequests": 101,
+          "originBytes": 119133,
+          "originCpuMs": 38.516000000000005,
+          "updatesComputed": 41
+        },
+        {
+          "label": "SYNC, shared result (303) with links via shared cache",
+          "clientRequests": 4300,
+          "clientBytes": 9058642,
+          "retries": 0,
+          "durationMs": 1612.041083,
+          "p50": 583.9161250000002,
+          "p95": 944.190667,
+          "originRequests": 142,
+          "originBytes": 132652,
+          "originCpuMs": 47.95,
+          "updatesComputed": 41
+        },
+        {
+          "label": "Mercure (hub)",
+          "clientRequests": 100,
+          "clientBytes": 7188900,
+          "retries": 0,
+          "durationMs": 1097.934542,
+          "p50": 99.68966699999999,
+          "p95": 168.33129199999996,
+          "originRequests": 100,
+          "originBytes": 6965800,
+          "originCpuMs": null,
+          "updatesComputed": null
+        }
+      ]
+    },
+    {
+      "scenario": "spread",
+      "name": "Different states: each client went offline after one of rounds 0 to 4",
+      "distinctStates": 5,
+      "rows": [
+        {
+          "label": "GET (full), via shared cache",
+          "clientRequests": 5000,
+          "clientBytes": 107500150,
+          "retries": 0,
+          "durationMs": 1373.997708,
+          "p50": 399.7691249999999,
+          "p95": 898.0826249999999,
+          "originRequests": 50,
+          "originBytes": 1070840,
+          "originCpuMs": 9.951999999999998,
+          "updatesComputed": 0
+        },
+        {
+          "label": "Braid (braid-http), via shared cache",
+          "clientRequests": 5000,
+          "clientBytes": 5592378,
+          "retries": 0,
+          "durationMs": 1409.661959,
+          "p50": 465.45112499999993,
+          "p95": 818.33825,
+          "originRequests": 97,
+          "originBytes": 101887,
+          "originCpuMs": 24.914000000000016,
+          "updatesComputed": 60
+        },
+        {
+          "label": "SYNC, inline",
+          "clientRequests": 100,
+          "clientBytes": 4310651,
+          "retries": 0,
+          "durationMs": 1071.454708,
+          "p50": 90.81012499999997,
+          "p95": 105.03645899999992,
+          "originRequests": 100,
+          "originBytes": 4228780,
+          "originCpuMs": 54.14,
+          "updatesComputed": 60
+        },
+        {
+          "label": "SYNC, links via shared cache",
+          "clientRequests": 2958,
+          "clientBytes": 5965895,
+          "retries": 0,
+          "durationMs": 1414.145917,
+          "p50": 354.29095800000005,
+          "p95": 669.7873750000001,
+          "originRequests": 160,
+          "originBytes": 646943,
+          "originCpuMs": 61.13199999999999,
+          "updatesComputed": 60
+        },
+        {
+          "label": "SYNC, shared result (303) via shared cache",
+          "clientRequests": 200,
+          "clientBytes": 4431258,
+          "retries": 0,
+          "durationMs": 1148.2265830000001,
+          "p50": 174.02887500000008,
+          "p95": 190.21179199999983,
+          "originRequests": 105,
+          "originBytes": 265296,
+          "originCpuMs": 45.840999999999994,
+          "updatesComputed": 60
+        },
+        {
+          "label": "SYNC, shared result (303) with links via shared cache",
+          "clientRequests": 3058,
+          "clientBytes": 6076300,
+          "retries": 0,
+          "durationMs": 1526.7020830000001,
+          "p50": 428.7813329999999,
+          "p95": 557.2447080000002,
+          "originRequests": 165,
+          "originBytes": 184200,
+          "originCpuMs": 55.752999999999986,
+          "updatesComputed": 60
+        },
+        {
+          "label": "Mercure (hub)",
+          "clientRequests": 100,
+          "clientBytes": 4642186,
+          "retries": 0,
+          "durationMs": 1067.5594170000002,
+          "p50": 89.33000000000004,
+          "p95": 99.40674999999999,
+          "originRequests": 100,
+          "originBytes": 4409086,
+          "originCpuMs": null,
+          "updatesComputed": null
+        }
+      ]
+    }
+  ]
+}

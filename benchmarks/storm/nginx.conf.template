@@ -1,0 +1,32 @@
+worker_processes auto;
+events { worker_connections 8192; }
+
+http {
+  access_log off;
+  proxy_cache_path /var/cache/nginx/sync levels=1:2 keys_zone=sync:20m max_size=1g inactive=60m use_temp_path=off;
+
+  upstream origin {
+    server host.docker.internal:__ORIGIN_PORT__;
+    keepalive 64;
+  }
+
+  server {
+    listen 80;
+
+    location / {
+      proxy_pass http://origin;
+      proxy_http_version 1.1;
+      proxy_set_header Connection "";
+      proxy_buffering on;
+
+      # Shared cache, as a CDN edge would provide. Only GET and HEAD are cached;
+      # QUERY passes through to the origin. Braid responses vary on Parents.
+      proxy_cache sync;
+      proxy_cache_key "$request_method$request_uri|$http_parents";
+      proxy_cache_lock on;
+      proxy_cache_lock_timeout 30s;
+      proxy_cache_lock_age 30s;
+      add_header X-Cache $upstream_cache_status always;
+    }
+  }
+}

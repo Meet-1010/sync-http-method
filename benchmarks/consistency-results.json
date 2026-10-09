@@ -1,0 +1,124 @@
+[
+  {
+    "scenario": "idealized (fixed delays)",
+    "rows": [
+      {
+        "label": "GET, parallel",
+        "runs": 300,
+        "torn": 9,
+        "rate": 0.03,
+        "ci": [
+          0.015861673205964575,
+          0.05602315099190695
+        ],
+        "medianMs": 42.538125000000036
+      },
+      {
+        "label": "GET, sequential",
+        "runs": 300,
+        "torn": 300,
+        "rate": 1,
+        "ci": [
+          0.9873565700022643,
+          0.9999999999999999
+        ],
+        "medianMs": 125.41445899999962
+      },
+      {
+        "label": "Braid (braid-http), parallel",
+        "runs": 300,
+        "torn": 10,
+        "rate": 0.03333333333333333,
+        "ci": [
+          0.018204749873650852,
+          0.0602624514575691
+        ],
+        "medianMs": 43.869707999998354
+      },
+      {
+        "label": "SYNC",
+        "runs": 300,
+        "torn": 0,
+        "rate": 0,
+        "ci": [
+          0,
+          0.012643429997735661
+        ],
+        "medianMs": 42.88220900000306
+      },
+      {
+        "label": "SYNC, consistent",
+        "runs": 300,
+        "torn": 0,
+        "rate": 0,
+        "ci": [
+          0,
+          0.012643429997735661
+        ],
+        "medianMs": 42.86029100000451
+      }
+    ],
+    "commits": 16282
+  },
+  {
+    "scenario": "realistic (network jitter up to 10 ms, store reads 1 to 8 ms)",
+    "rows": [
+      {
+        "label": "GET, parallel",
+        "runs": 300,
+        "torn": 247,
+        "rate": 0.8233333333333334,
+        "ci": [
+          0.7761666509606149,
+          0.8623239309741828
+        ],
+        "medianMs": 58.39991700000246
+      },
+      {
+        "label": "GET, sequential",
+        "runs": 300,
+        "torn": 300,
+        "rate": 1,
+        "ci": [
+          0.9873565700022643,
+          0.9999999999999999
+        ],
+        "medianMs": 165.1823330000043
+      },
+      {
+        "label": "Braid (braid-http), parallel",
+        "runs": 300,
+        "torn": 246,
+        "rate": 0.82,
+        "ci": [
+          0.7725658602716683,
+          0.8593423445297808
+        ],
+        "medianMs": 59.57983299999614
+      },
+      {
+        "label": "SYNC",
+        "runs": 300,
+        "torn": 173,
+        "rate": 0.5766666666666667,
+        "ci": [
+          0.5201322236304367,
+          0.6312624504365771
+        ],
+        "medianMs": 57.36854100000346
+      },
+      {
+        "label": "SYNC, consistent",
+        "runs": 300,
+        "torn": 0,
+        "rate": 0,
+        "ci": [
+          0,
+          0.012643429997735661
+        ],
+        "medianMs": 57.76408400002401
+      }
+    ],
+    "commits": 21743
+  }
+]
