@@ -45,7 +45,9 @@ npm run bench   # comparative benchmark (see benchmarks/README.md)
 
 ## Use it in your own app
 
-Not yet on npm; install from this repository (`npm install github:Meet-1010/sync-http-method`).
+```bash
+npm install sync-http-method
+```
 
 **Client** (browsers and Node 18+, built on `fetch`):
 
