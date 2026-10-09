@@ -1,45 +1,46 @@
 'use strict';
 
-const { getCurrentVersion, getVersion } = require('./version-store');
+const memoryStore = require('./version-store');
 const { buildUpdate, SNAPSHOT } = require('./delta-engine');
 
 const MAX_RESOURCES = 100;
 
-// Resolve every baseline independently. A stale or missing resource affects
-// only its own entry, never the rest of the batch.
-function computeResults(baselines, { accept, recover = true } = {}) {
-  const results = Object.create(null);
-  let allUnchanged = true;
+// A store answers two questions, synchronously or by promise:
+//   getCurrent(resource)        -> { id, data } | null
+//   getVersion(resource, token) -> { id, data } | null   (null = cannot reconstruct that state)
+// A store that only keeps recent versions is valid: older tokens get a snapshot.
+const defaultStore = {
+  getCurrent: memoryStore.getCurrentVersion,
+  getVersion: memoryStore.getVersion,
+};
 
-  for (const [resource, token] of Object.entries(baselines)) {
-    const current = getCurrentVersion(resource);
-    if (!current) {
-      results[resource] = { status: 404 };
-      allUnchanged = false;
-      continue;
-    }
+async function resolveOne(store, resource, token, { accept, recover }) {
+  const current = await store.getCurrent(resource);
+  if (!current) return { status: 404 };
+  if (token === current.id) return { status: 304, to: current.id };
 
-    if (token === current.id) {
-      results[resource] = { status: 304, to: current.id };
-      continue;
-    }
-    allUnchanged = false;
-
-    const base = token === null ? null : getVersion(resource, token);
-    if (token !== null && !base) {
-      results[resource] = recover
-        ? { status: 200, format: SNAPSHOT, from: null, to: current.id, baseline: 'unrecognized', data: current.data }
-        : { status: 409 };
-      continue;
-    }
-
-    const update = base
-      ? buildUpdate(base.data, current.data, accept)
-      : { format: SNAPSHOT, data: current.data };
-    results[resource] = { status: 200, format: update.format, from: base ? token : null, to: current.id, data: update.data };
+  const base = token === null ? null : await store.getVersion(resource, token);
+  if (token !== null && !base) {
+    return recover
+      ? { status: 200, format: SNAPSHOT, from: null, to: current.id, baseline: 'unrecognized', data: current.data }
+      : { status: 409 };
   }
 
-  return { results, allUnchanged };
+  const update = base
+    ? buildUpdate(base.data, current.data, accept)
+    : { format: SNAPSHOT, data: current.data };
+  return { status: 200, format: update.format, from: base ? token : null, to: current.id, data: update.data };
 }
 
-module.exports = { computeResults, MAX_RESOURCES };
+// Resolve every baseline independently. A stale or missing resource affects
+// only its own entry, never the rest of the batch.
+async function computeResults(baselines, { accept, recover = true, store = defaultStore } = {}) {
+  const entries = Object.entries(baselines);
+  const resolved = await Promise.all(entries.map(([resource, token]) => resolveOne(store, resource, token, { accept, recover })));
+
+  const results = Object.create(null);
+  entries.forEach(([resource], i) => { results[resource] = resolved[i]; });
+  return { results, allUnchanged: resolved.every(r => r.status === 304) };
+}
+
+module.exports = { computeResults, defaultStore, MAX_RESOURCES };

@@ -152,6 +152,14 @@ Servers MUST bound the cost of a SYNC request:
 - A maximum body size; the RECOMMENDED default is 64 KiB. Excess: `413`, ideally without reading the whole body.
 - A maximum header section size. Excess: `431 Request Header Fields Too Large`.
 
+### 4.5 POST Compatibility Form
+
+Many servers, proxies, CDNs, and WAFs reject methods they do not know, and some runtimes do so at the HTTP parser (Node.js returns `400` before any application code runs). To make SYNC deployable on such paths, a server that supports SYNC SHOULD also accept the same request as a `POST` whose `Content-Type` is `application/sync-baseline+json`, and MUST then process it exactly as it would the SYNC method and return an identical response.
+
+A client SHOULD try the SYNC method first and fall back to the POST form on `400`, `405`, or `501`, or when the connection is reset before a response, and SHOULD remember per origin that the POST form is required. Generic intermediaries do not know that this POST is safe and idempotent, so they will not cache or automatically retry it. SYNC-aware clients MAY retry it, because the exchange is idempotent. Servers MUST apply the limits of Section 4.4 to this form as well.
+
+The POST form trades the clean semantics of a dedicated method for reach. Whether the specification should instead define SYNC only as a QUERY profile (Section 11) is open.
+
 ---
 
 ## 5. Response Format
@@ -165,6 +173,8 @@ Servers MUST bound the cost of a SYNC request:
 **413 Content Too Large**, **431 Request Header Fields Too Large.** Limits of Section 4.4.
 
 **422 Unprocessable Content.** The request is malformed: invalid JSON, missing or non-object `baselines`, a token that is neither string nor `null`, a malformed `Sync-Baseline` header, or baselines in both header and body.
+
+**411 Length Required.** A SYNC request used a chunked body. Servers MAY require `Content-Length` for this method.
 
 **501 Not Implemented.** The server does not support SYNC at the target.
 
@@ -335,12 +345,13 @@ Without TLS, an on-path attacker can alter a patch. Under TLS, record-layer inte
 
 ## 11. Open Questions
 
-1. **New method or QUERY profile?** Since RFC 10008, SYNC could be defined as a QUERY with `application/sync-baseline+json`, avoiding a new method registration. The cost is that QUERY semantics for intermediaries are generic; the benefit is deployability on infrastructure that already tolerates QUERY.
-2. **Alignment with Braid version tokens.** Tokens are opaque so a Braid version-ID set can be carried as a string. Should the draft define a recommended encoding for sets of IDs?
-3. **Caching.** Can SYNC responses be made safely cacheable, and is that valuable?
-4. **Truncation.** `Sync-Delta-Complete: false` is specified minimally. Is omission of resources sufficient, or is a continuation cursor needed?
-5. **HTTP/2 and HTTP/3.** With multiplexing, N parallel GETs cost less than under HTTP/1.1. The remaining advantage of a batch is measured in the accompanying benchmark.
-6. **Binary and non-JSON resources.** Which update formats should be registered?
+1. **New method, POST form, or QUERY profile?** The POST form (Section 4.5) works everywhere today and loses method-level semantics for intermediaries.
+2. **New method or QUERY profile?** Since RFC 10008, SYNC could be defined as a QUERY with `application/sync-baseline+json`, avoiding a new method registration. The cost is that QUERY semantics for intermediaries are generic; the benefit is deployability on infrastructure that already tolerates QUERY.
+3. **Alignment with Braid version tokens.** Tokens are opaque so a Braid version-ID set can be carried as a string. Should the draft define a recommended encoding for sets of IDs?
+4. **Caching.** Can SYNC responses be made safely cacheable, and is that valuable?
+5. **Truncation.** `Sync-Delta-Complete: false` is specified minimally. Is omission of resources sufficient, or is a continuation cursor needed?
+6. **HTTP/2 and HTTP/3.** With multiplexing, N parallel GETs cost less than under HTTP/1.1. The remaining advantage of a batch is measured in the accompanying benchmark.
+7. **Binary and non-JSON resources.** Which update formats should be registered?
 
 ---
 
@@ -355,3 +366,6 @@ Without TLS, an on-path attacker can alter a patch. Under TLS, record-layer inte
 - `Sync-Server-Version`, `options.max_delta_size`, and `options.compression` removed.
 - Limits (resource count, body size, header size) and `Cache-Control: no-store` are now implemented by the reference server.
 - Related work and positioning added (Section 1.5).
+- POST compatibility form added (Section 4.5), with client fallback guidance.
+- Servers may keep connections alive across SYNC requests; chunked SYNC bodies are refused with `411`.
+- The reference server's data source is now a pluggable, possibly asynchronous store; a store that cannot reconstruct an old token simply causes a snapshot to be sent.

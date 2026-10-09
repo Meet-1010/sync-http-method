@@ -445,7 +445,7 @@ function report(results) {
   md += `- **SYNC**: the reference server and client in this repository: one request, N baselines.\n\n`;
   md += `## Caveats\n\n`;
   md += `- The Braid-style and Mercure-style servers are minimal re-implementations written for this benchmark, not the projects' own software.\n`;
-  md += `- The SYNC server closes the connection after each response (no keep-alive), so SYNC pays a TCP handshake per request. This hurts it in the time columns for repeated polling; every run here is a single cold exchange so it does not distort these numbers.\n`;
+  md += `- Every run is a single cold exchange on fresh connections, so connection reuse (which the SYNC server now supports) is not exercised.\n`;
   md += `- Only the catch-up exchange is measured. Braid and Mercure also provide live push, which SYNC does not.\n`;
   md += `- Mercure's replay is history, not state: the client receives every intermediate patch. That is a feature when history matters and a cost when it does not.\n\n`;
 

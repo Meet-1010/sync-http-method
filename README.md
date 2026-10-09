@@ -35,6 +35,30 @@ npm run demo    # end-to-end demo
 npm start       # server on port 3000
 ```
 
+## Use it in your own app
+
+Works on an ordinary Express app, behind any proxy or CDN, with no custom-method support. This is the "POST form" of the protocol (spec Section 4.5):
+
+```js
+const { syncOverPost } = require('./server/src/express-middleware');
+
+app.use(syncOverPost({ store: {
+  // return { id, data } or null; either may be async (database, cache, ...)
+  async getCurrent(resource) { /* ... */ },
+  async getVersion(resource, token) { /* null = cannot rebuild it, send a snapshot */ },
+}}));
+```
+
+```js
+const { syncRequest } = require('./client/src/sync-client');
+const res = await syncRequest('https://api.example.com/sync', { '/users': 'v42', '/posts': null });
+// Tries the SYNC method first, falls back to POST automatically, and remembers per origin.
+```
+
+The store only needs the versions you can afford to keep. A token you cannot reconstruct is answered with a snapshot, not an error.
+
+**Known limits of the Node reference server.** SYNC connections can be kept alive, but the first non-SYNC request on a connection hands the rest of that connection to Express, so a connection that mixes SYNC with other methods is not supported. Use the POST form for such clients, or a runtime/proxy that accepts arbitrary methods. This package is not published to npm yet.
+
 ## Request
 
 ```http
@@ -82,8 +106,9 @@ Per-resource `status`: `200` update present, `304` unchanged, `404` no such reso
 
 ```
 server/src/
-  index.js          # net.createServer: bypasses llhttp's method whitelist, enforces size limits
+  index.js          # net.createServer: bypasses llhttp's method whitelist, keep-alive, size limits
   sync-handler.js   # request validation, header/body forms, response writing
+  express-middleware.js  # POST form for any Express app
   sync-core.js      # per-resource resolution (the protocol logic)
   delta-engine.js   # JSON Patch, JSON Merge Patch, snapshot selection
   version-store.js  # in-memory versioned store

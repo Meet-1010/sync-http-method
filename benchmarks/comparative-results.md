@@ -21,7 +21,7 @@ A client holds N resources (100 items each, about 20 KB as JSON) at round 0. The
 ## Caveats
 
 - The Braid-style and Mercure-style servers are minimal re-implementations written for this benchmark, not the projects' own software.
-- The SYNC server closes the connection after each response (no keep-alive), so SYNC pays a TCP handshake per request. This hurts it in the time columns for repeated polling; every run here is a single cold exchange so it does not distort these numbers.
+- Every run is a single cold exchange on fresh connections, so connection reuse (which the SYNC server now supports) is not exercised.
 - Only the catch-up exchange is measured. Braid and Mercure also provide live push, which SYNC does not.
 - Mercure's replay is history, not state: the client receives every intermediate patch. That is a feature when history matters and a cost when it does not.
 
