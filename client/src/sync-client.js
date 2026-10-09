@@ -7,11 +7,11 @@ const { URL } = require('url');
 const quote = s => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 const SYNC_TYPE = 'application/sync-baseline+json';
 
-// Origins where the SYNC method failed and the POST form worked, so later calls skip the failed attempt.
+// Origins where QUERY failed and POST worked, so later calls skip the failed attempt.
 const postOnly = new Set();
 
-// Statuses and errors that mean "something on the path does not know the SYNC method".
-const FALLBACK_STATUSES = new Set([400, 405, 501]);
+// Statuses and errors that mean "something on the path does not support this request".
+const FALLBACK_STATUSES = new Set([400, 404, 405, 415, 501]);
 const FALLBACK_ERRORS = new Set(['ECONNRESET', 'EPIPE']);
 
 function send(method, rawUrl, baselines, opts) {
@@ -63,11 +63,12 @@ function send(method, rawUrl, baselines, opts) {
   });
 }
 
-// opts.transport: 'auto' (default) tries the SYNC method and falls back to the POST form;
-//                 'method' uses SYNC only; 'post' uses the POST form only.
+// Node http-module client (used by the tests and benchmark; applications should use fetch-client).
+// opts.transport: 'auto' (default) sends QUERY and falls back to POST;
+//                 'query', 'post', or 'method' (the dedicated SYNC method).
 // opts.headers: extra request headers; opts.gzip: false to disable compression;
 // opts.accept: media types in preference order; opts.recover: false to get 409
-// for unrecognized baselines; opts.useHeader: send baselines in Sync-Baseline;
+// for unrecognized baselines; opts.useHeader: send baselines in Sync-Baseline (SYNC method only);
 // opts.agent: an http.Agent (for keep-alive).
 async function syncRequest(rawUrl, baselines, opts = {}) {
   const transport = opts.transport || 'auto';
@@ -76,11 +77,12 @@ async function syncRequest(rawUrl, baselines, opts = {}) {
   if (transport === 'post' || (transport === 'auto' && postOnly.has(origin))) {
     return send('POST', rawUrl, baselines, opts);
   }
+  if (transport === 'query') return send('QUERY', rawUrl, baselines, opts);
   if (transport === 'method') return send('SYNC', rawUrl, baselines, opts);
 
   let res;
   try {
-    res = await send('SYNC', rawUrl, baselines, opts);
+    res = await send('QUERY', rawUrl, baselines, opts);
   } catch (err) {
     if (!FALLBACK_ERRORS.has(err.code) && err.message !== 'socket hang up') throw err;
     return fallback(rawUrl, baselines, opts, origin);

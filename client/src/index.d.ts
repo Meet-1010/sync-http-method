@@ -17,12 +17,12 @@ export interface ResultDocument {
   synced_at: string;
 }
 
-export type Transport = 'auto' | 'method' | 'post';
+export type Transport = 'auto' | 'query' | 'post' | 'method';
 
 export interface SyncFetchOptions {
   /** Defaults to globalThis.fetch. */
   fetch?: typeof fetch;
-  /** 'auto' tries the SYNC method and falls back to the POST form, remembering per origin. */
+  /** 'auto' sends QUERY and falls back to POST, remembering per origin; 'method' uses the dedicated SYNC method. */
   transport?: Transport;
   /** Update formats in preference order. */
   accept?: UpdateFormat[];
@@ -36,7 +36,7 @@ export interface SyncResponse {
   status: number;
   headers: Headers;
   body: ResultDocument | { error: string } | null;
-  transport: 'SYNC' | 'POST';
+  transport: 'QUERY' | 'POST' | 'SYNC';
 }
 
 export function syncFetch(url: string, baselines: Baselines, options?: SyncFetchOptions): Promise<SyncResponse>;

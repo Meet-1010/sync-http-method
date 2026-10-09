@@ -29,7 +29,7 @@ async function run() {
 
   log('SYNC #1 — four resources in one request, one of them unknown to the server');
   const first = await syncRequest(BASE, baselines.toJSON(), { accept: [MERGE_PATCH, JSON_PATCH] });
-  console.log(`  → HTTP ${first.status}`);
+  console.log(`  → ${first.transport} request, HTTP ${first.status}`);
   log('PER-RESOURCE RESULTS', first.body.results);
 
   for (const [resource, result] of Object.entries(first.body.results)) {
@@ -41,7 +41,7 @@ async function run() {
   log('SYNC #2 — everything the client tracks is now current');
   const current = Object.fromEntries(Object.entries(baselines.toJSON()).filter(([r]) => r !== '/ghost'));
   const second = await syncRequest(BASE, current);
-  console.log(`  → HTTP ${second.status}${second.status === 204 ? ' No Content: nothing to transfer' : ''}`);
+  console.log(`  → ${second.transport} request, HTTP ${second.status}${second.status === 204 ? ' No Content: nothing to transfer' : ''}`);
 
   log('DEMO COMPLETE');
   stopServer(() => {});

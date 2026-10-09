@@ -1,6 +1,6 @@
 {
   "name": "sync-http-method",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Catch up many HTTP resources in one request: per-resource patches or snapshots, with a POST fallback that works on any server.",
   "main": "client/src/index.js",
   "types": "client/src/index.d.ts",

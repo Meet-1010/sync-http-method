@@ -15,8 +15,7 @@ const assert = require('assert');
 const crypto = require('crypto');
 const { braidify, fetch: braidFetch } = require('braid-http');
 
-const { startServer, stopServer, server: syncNetServer } = require('../server/src/index');
-const { addVersion } = require('../server/src/version-store');
+const { syncHandler, createMemoryStore } = require('../server/src/package');
 const { buildUpdate, JSON_PATCH } = require('../server/src/delta-engine');
 const { syncRequest } = require('../client/src/sync-client');
 const { applyResult } = require('../client/src/apply');
@@ -255,7 +254,8 @@ const close = (srv) => new Promise(r => srv.close(r));
 
 function braidUpdate(base, cur) {
   const keys = Object.keys(cur.data).filter(k => JSON.stringify(base.data[k]) !== JSON.stringify(cur.data[k]));
-  const patches = keys.map(k => ({ unit: 'json', range: `[${JSON.stringify(k)}]`, content: JSON.stringify(cur.data[k]) }));
+  // JSON ranges are JSON Pointers, as in draft-toomim-httpbis-range-patch-00 ("Content-Range: json /foo/bar/3").
+  const patches = keys.map(k => ({ unit: 'json', range: `/${k.replace(/~/g, '~0').replace(/\//g, '~1')}`, content: JSON.stringify(cur.data[k]) }));
   const patchBytes = patches.reduce((n, p) => n + p.range.length + p.content.length, 0);
   const snapshot = JSON.stringify(cur.data);
   return patchBytes < snapshot.length ? { patches } : { body: snapshot };
@@ -286,7 +286,10 @@ function applyBraid(local, update) {
   const text = v => (typeof v === 'string' ? v : Buffer.from(v).toString('utf8'));
   if (update.patches) {
     const out = clone(local);
-    for (const p of update.patches) out[JSON.parse(p.range)[0]] = JSON.parse(p.content_text ?? text(p.content));
+    for (const p of update.patches) {
+      const key = p.range.slice(1).replace(/~1/g, '/').replace(/~0/g, '~');
+      out[key] = JSON.parse(p.content_text ?? text(p.content));
+    }
     return out;
   }
   return JSON.parse(update.body_text ?? text(update.body));
@@ -519,7 +522,8 @@ const RUNNERS = {
     const local = baselineState(ctx.history);
     const baselines = {};
     for (let i = 0; i < ctx.N; i++) baselines[ctx.syncName(i)] = 'v0';
-    const res = await syncRequest(`http://127.0.0.1:${port}/api/users`, baselines, { headers: ctx.profile.headers, gzip: ctx.profile.gzip });
+    const res = await syncRequest(`http://127.0.0.1:${port}/sync`, baselines, { transport: 'query', headers: ctx.profile.headers, gzip: ctx.profile.gzip });
+    assert.strictEqual(res.transport, 'QUERY');
     if (res.status === 200) {
       for (let i = 0; i < ctx.N; i++) {
         const result = res.body.results[ctx.syncName(i)];
@@ -552,8 +556,6 @@ async function runOnce(key, ctx, ports) {
 }
 
 async function main() {
-  await new Promise(r => startServer(0, r));
-  const syncPort = syncNetServer.address().port;
   const results = [];
   const hub = await mercureAvailable();
   if (!hub) console.warn(`Mercure hub not reachable at ${MERCURE_URL}; skipping the "Mercure real" column.`);
@@ -564,8 +566,12 @@ async function main() {
     for (const N of NS) {
       const history = buildHistories(N);
       for (const L of LS) {
-        const syncName = i => `/b/${profileKey}/${N}/${L}/${i}`;
-        for (let i = 0; i < N; i++) for (const e of history[i]) if (e.round <= L) addVersion(syncName(i), e.token, e.data);
+        // SYNC as deployed in practice: QUERY to an ordinary Node server running syncHandler.
+        const syncName = i => `/r/${i}`;
+        const syncStore = createMemoryStore();
+        for (let i = 0; i < N; i++) for (const e of history[i]) if (e.round <= L) syncStore.addVersion(syncName(i), e.token, e.data);
+        const handleSync = syncHandler({ store: syncStore });
+        const syncServer = http.createServer((req, res) => handleSync(req, res, () => { res.statusCode = 404; res.end(); }));
 
         const ctx = { history, N, L, profile, syncName };
         if (hub) ctx.mercure = await mercureSetup(ctx, `/bench/${runId}/${profileKey}/${N}/${L}`);
@@ -573,7 +579,7 @@ async function main() {
         const h1 = http.createServer(handler);
         const h2 = http2.createServer(handler);
         const braidServer = http.createServer(braidify(makeBraidHandler(ctx)));
-        const ports = { h1: await listen(h1), h2: await listen(h2), braid: await listen(braidServer), sync: syncPort, mercure: Number(new URL(MERCURE_URL).port) };
+        const ports = { h1: await listen(h1), h2: await listen(h2), braid: await listen(braidServer), sync: await listen(syncServer), mercure: Number(new URL(MERCURE_URL).port) };
 
         const row = { profile: profileKey, N, L, changed: history.filter(h => entryAt(h, L).round > 0).length, protocols: {} };
         for (const [label, key] of protocols) {
@@ -585,12 +591,11 @@ async function main() {
         results.push(row);
         console.log(`done ${profileKey} N=${N} L=${L}`);
         braidServer.closeAllConnections();
-        await close(h1); await close(h2); await close(braidServer);
+        await close(h1); await close(h2); await close(braidServer); await close(syncServer);
       }
     }
   }
 
-  await new Promise(r => stopServer(r));
   return { results, protocols };
 }
 
@@ -614,10 +619,10 @@ function report({ results, protocols }) {
   md += `- **Braid model H1 / H2**: my minimal model of draft-toomim-httpbis-braid-http-04 (per-resource \`GET\` with \`Parents\`, JSON Patch or 304). H2 is cleartext HTTP/2 with all N requests on one connection.\n`;
   md += `- **Braid real**: the \`braid-http\` library v${braidVersion} (\`braidify\` on the server, its \`fetch\` on the client), one \`GET\` with \`Parents\` per resource. Its Node client uses undici over HTTP/1.1 here (cleartext rules out HTTP/2 negotiation), so requests run on parallel connections.\n`;
   md += `- **Braid real mux**: the same library with subscriptions and its Multiplexing v1.0 extension forced on: one \`POST\` creates a multiplexer, then one \`GET\` per resource, with all responses carried on the multiplexer stream. The client stops once each resource is caught up (\`Current-Version\` or the first update).\n`;
-  md += `- **Braid real, patch format**: Braid range patches (\`unit: json\`, one per changed item), with the same "snapshot if smaller" rule. braid-http does not compress responses.\n`;
+  md += `- **Braid real, patch format**: Braid range patches (\`unit: json\`, a JSON Pointer range per changed item, as in draft-toomim-httpbis-range-patch-00), with the same "snapshot if smaller" rule. braid-http does not compress responses.\n`;
   md += `- **Mercure model**: my minimal model of draft-dunglas-mercure-08 (one SSE request, \`Last-Event-ID\`, replay of every intermediate event), not compressed.\n`;
   md += `- **Mercure real**: the Mercure.rocks hub (Docker image \`dunglas/mercure\`, v1.1.0, default bolt history). The history is published to the hub before measurement; the client subscribes with N \`match\` parameters and \`Last-Event-ID\`, and disconnects after receiving the expected number of events (a real subscriber would stay connected). In the realistic profile the client sends a real RFC 9068 subscriber token. The hub's default configuration does not compress responses.\n`;
-  md += `- **SYNC**: the reference server and client in this repository: one request, N baselines.\n\n`;
+  md += `- **SYNC**: this repository's \`syncHandler\` on an ordinary Node HTTP server and its client, sending one \`QUERY\` (RFC 10008) with N baselines.\n\n`;
   md += `## Caveats\n\n`;
   md += `- "Model" columns are minimal re-implementations written for this benchmark; "real" columns run the projects' own software. Real Braid patch semantics on the client (applying \`json\` range patches) are application code written for this benchmark, as the library leaves them to the application.\n`;
   md += `- Braid's Node client cannot use HTTP/2 over cleartext, so "Braid real" is measured over HTTP/1.1 only; "Braid model H2" is the HTTP/2 estimate.\n`;

@@ -6,11 +6,19 @@ export interface StoredVersion<T = unknown> {
   data: T;
 }
 
+/** The request a store call is made for, so the store can authorize per resource. */
+export interface SyncContext {
+  method: 'QUERY' | 'POST' | 'SYNC';
+  target: string;
+  headers: Record<string, string | string[] | undefined>;
+}
+
 /** Everything SYNC needs from your data layer. Either method may be async. */
 export interface SyncStore<T = unknown> {
-  getCurrent(resource: string): StoredVersion<T> | null | Promise<StoredVersion<T> | null>;
+  /** Return null for a resource that does not exist or that the caller may not read (reported as 404). */
+  getCurrent(resource: string, context: SyncContext): StoredVersion<T> | null | Promise<StoredVersion<T> | null>;
   /** Return null when that version cannot be rebuilt; the client then receives a snapshot. */
-  getVersion(resource: string, token: string): StoredVersion<T> | null | Promise<StoredVersion<T> | null>;
+  getVersion(resource: string, token: string, context: SyncContext): StoredVersion<T> | null | Promise<StoredVersion<T> | null>;
 }
 
 export interface SyncServer {
@@ -20,14 +28,27 @@ export interface SyncServer {
   close(cb?: () => void): void;
 }
 
-/** Serves the SYNC method and its POST form in front of an existing request handler. */
+/**
+ * Serves SYNC requests sent with QUERY (and POST as a fallback) whose Content-Type is
+ * application/sync-baseline+json; all other requests go to next(). Works with
+ * Express/Connect or around a plain Node handler.
+ */
+export function syncHandler(options?: {
+  store?: SyncStore;
+  /** Cache-Control for successful responses. Default 'no-store'; use public caching only for caller-independent data. */
+  cacheControl?: string;
+  /** Accept the POST fallback. Default true. */
+  allowPost?: boolean;
+  /** Answer QUERY requests with a missing (400) or other (415) Content-Type instead of passing them on. Default false. */
+  strict?: boolean;
+}): (req: IncomingMessage, res: ServerResponse, next: () => void) => Promise<void>;
+
+/** syncHandler plus the optional dedicated SYNC method, in front of an existing request handler. */
 export function createSyncServer(options?: { app?: RequestListener; store?: SyncStore }): SyncServer;
 
-/** Middleware for the POST form; works with Express/Connect or a plain Node handler. */
-export function syncOverPost(options?: { store?: SyncStore }):
-  (req: IncomingMessage, res: ServerResponse, next: () => void) => Promise<void>;
-
-export interface MemoryStore<T = unknown> extends SyncStore<T> {
+export interface MemoryStore<T = unknown> {
+  getCurrent(resource: string): StoredVersion<T> | null;
+  getVersion(resource: string, token: string): StoredVersion<T> | null;
   addVersion(resource: string, id: string, data: T): void;
   getCurrentVersion(resource: string): StoredVersion<T> | null;
   listResources(): string[];
@@ -38,7 +59,7 @@ export function createMemoryStore<T = unknown>(options?: { maxVersions?: number 
 
 export function computeResults(
   baselines: Record<string, string | null>,
-  options?: { accept?: string[]; recover?: boolean; store?: SyncStore },
+  options?: { accept?: string[]; recover?: boolean; store?: SyncStore; context?: Partial<SyncContext> },
 ): Promise<{ results: Record<string, unknown>; allUnchanged: boolean }>;
 
 export const JSON_PATCH: 'application/json-patch+json';

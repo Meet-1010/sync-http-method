@@ -6,17 +6,19 @@ const { buildUpdate, SNAPSHOT } = require('./delta-engine');
 const MAX_RESOURCES = 100;
 
 // A store answers two questions, synchronously or by promise:
-//   getCurrent(resource)        -> { id, data } | null
-//   getVersion(resource, token) -> { id, data } | null   (null = cannot reconstruct that state)
+//   getCurrent(resource, context)        -> { id, data } | null
+//   getVersion(resource, token, context) -> { id, data } | null   (null = cannot reconstruct that state)
+// context is { method, target, headers } of the request, for per-resource authorization:
+// return null from getCurrent for a resource the caller may not read (reported as 404).
 // A store that only keeps recent versions is valid: older tokens get a snapshot.
 const defaultStore = demoStore;
 
-async function resolveOne(store, resource, token, { accept, recover }) {
-  const current = await store.getCurrent(resource);
+async function resolveOne(store, resource, token, { accept, recover, context }) {
+  const current = await store.getCurrent(resource, context);
   if (!current) return { status: 404 };
   if (token === current.id) return { status: 304, to: current.id };
 
-  const base = token === null ? null : await store.getVersion(resource, token);
+  const base = token === null ? null : await store.getVersion(resource, token, context);
   if (token !== null && !base) {
     return recover
       ? { status: 200, format: SNAPSHOT, from: null, to: current.id, baseline: 'unrecognized', data: current.data }
@@ -31,9 +33,9 @@ async function resolveOne(store, resource, token, { accept, recover }) {
 
 // Resolve every baseline independently. A stale or missing resource affects
 // only its own entry, never the rest of the batch.
-async function computeResults(baselines, { accept, recover = true, store = defaultStore } = {}) {
+async function computeResults(baselines, { accept, recover = true, store = defaultStore, context = {} } = {}) {
   const entries = Object.entries(baselines);
-  const resolved = await Promise.all(entries.map(([resource, token]) => resolveOne(store, resource, token, { accept, recover })));
+  const resolved = await Promise.all(entries.map(([resource, token]) => resolveOne(store, resource, token, { accept, recover, context })));
 
   const results = Object.create(null);
   entries.forEach(([resource], i) => { results[resource] = resolved[i]; });

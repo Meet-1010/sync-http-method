@@ -127,10 +127,16 @@ describe('Per-resource failure isolation', () => {
     expect(res.body.results['/nonexistent']).toEqual({ status: 404 });
   });
 
-  test('A resource named __proto__ is an ordinary key and pollutes nothing', async () => {
-    const res = await rawSync({ body: '{"baselines":{"__proto__":"v1","/posts":"v1"}}' });
+  test('A resource named /__proto__ is an ordinary key and pollutes nothing', async () => {
+    const res = await rawSync({ body: '{"baselines":{"/__proto__":"v1","/posts":"v1"}}' });
     expect(res.status).toBe(200);
-    expect(Object.keys(res.body.results)).toContain('__proto__');
+    expect(res.body.results['/__proto__']).toEqual({ status: 404 });
+    expect({}.status).toBeUndefined();
+  });
+
+  test('A bare __proto__ key is rejected like any non-path name, and pollutes nothing', async () => {
+    const res = await rawSync({ body: '{"baselines":{"__proto__":"v1"}}' });
+    expect(res.status).toBe(422);
     expect({}.status).toBeUndefined();
   });
 });
@@ -142,12 +148,21 @@ describe('Request validation', () => {
     expect((await sync({ resources: ['/users'] })).status).toBe(422);
   });
 
-  test('422 on malformed JSON', async () => {
-    expect((await rawSync({ body: '{ not json }' })).status).toBe(422);
+  test('400 when the content is not valid JSON (RFC 10008 Section 2.1)', async () => {
+    expect((await rawSync({ body: '{ not json }' })).status).toBe(400);
   });
+
+  test.each(['users', '//evil.example/users', 'https://evil.example/users', '', '/users#frag'])(
+    '422 when a resource name is not path-absolute: %p', async name => {
+      expect((await sync({ baselines: { [name]: 'v1' } })).status).toBe(422);
+    });
 
   test('422 when a token is not a string or null', async () => {
     expect((await sync({ baselines: { '/users': 3 } })).status).toBe(422);
+  });
+
+  test('422 when recover is not a boolean', async () => {
+    expect((await sync({ baselines: { '/users': 'v1' }, recover: 'no' })).status).toBe(422);
   });
 
   test('422 when accept is not an array of strings', async () => {
@@ -289,9 +304,9 @@ describe('Response headers', () => {
     expect(res.headers['cache-control']).toBe('no-store');
   });
 
-  test('Sync-Delta-Complete is present', async () => {
+  test('Sync-Delta-Complete is a Structured Field boolean', async () => {
     const res = await sync({ baselines: { '/users': 'v1' } });
-    expect(res.headers['sync-delta-complete']).toBe('true');
+    expect(res.headers['sync-delta-complete']).toBe('?1');
   });
 });
 

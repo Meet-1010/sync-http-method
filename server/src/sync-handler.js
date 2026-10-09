@@ -38,7 +38,7 @@ function sendResponse(socket, status, statusText, extraHeaders, body, acceptEnco
   if (!keepAlive) socket.end();
 }
 
-// Parses an RFC 8941 List of Inner Lists of Strings:
+// Parses a Structured Fields (RFC 9651) List of Inner Lists of Strings:
 //   ("/users" "v42"), ("/posts")      (one item = no baseline yet)
 function parseBaselineHeader(value) {
   const out = Object.create(null);
@@ -88,10 +88,17 @@ function parseBaselineHeader(value) {
   return Object.keys(out).length ? out : null;
 }
 
-const STATUS_TEXT = { 200: 'OK', 204: 'No Content', 413: 'Content Too Large', 422: 'Unprocessable Entity' };
+const STATUS_TEXT = { 200: 'OK', 204: 'No Content', 400: 'Bad Request', 413: 'Content Too Large', 422: 'Unprocessable Content' };
+
+// Resource names are absolute-path references (RFC 3986 Section 4.2) on the target's origin:
+// no scheme, no authority, no fragment.
+const isPathAbsolute = k => typeof k === 'string' && k.startsWith('/') && !k.startsWith('//') && !k.includes('#');
 
 // Pure protocol step: request body + headers in, a response description out.
-async function resolveSync(bodyStr, headers = {}, store) {
+// context (method, target, headers) is passed to the store so it can authorize per resource.
+// Status codes follow RFC 10008 Section 2.1: content that is not valid JSON is 400,
+// valid JSON that does not describe a valid request is 422.
+async function resolveSync(bodyStr, headers = {}, { store, context } = {}) {
   const fail = (status, message) => ({ status, extraHeaders: {}, body: { error: message } });
   const headerValue = headers['sync-baseline'];
   let baselines;
@@ -111,14 +118,17 @@ async function resolveSync(bodyStr, headers = {}, store) {
     try {
       parsed = JSON.parse(bodyStr || '{}');
     } catch {
-      return fail(422, 'Malformed JSON in request body');
+      return fail(400, 'Request content is not valid JSON');
     }
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return fail(422, 'Request body must be a JSON object');
     }
     baselines = parsed.baselines;
     accept = parsed.accept;
-    if (parsed.recover !== undefined) recover = parsed.recover === true;
+    if (parsed.recover !== undefined) {
+      if (typeof parsed.recover !== 'boolean') return fail(422, 'recover must be a boolean');
+      recover = parsed.recover;
+    }
 
     if (accept !== undefined && (!Array.isArray(accept) || !accept.every(a => typeof a === 'string'))) {
       return fail(422, 'accept must be an array of media types');
@@ -131,20 +141,23 @@ async function resolveSync(bodyStr, headers = {}, store) {
   if (!Object.values(baselines).every(t => t === null || typeof t === 'string')) {
     return fail(422, 'Each baseline must be a string token or null');
   }
+  if (!Object.keys(baselines).every(isPathAbsolute)) {
+    return fail(422, 'Resource names must be path-absolute references such as "/users"');
+  }
   if (Object.keys(baselines).length > MAX_RESOURCES) {
     return fail(413, `At most ${MAX_RESOURCES} resources per SYNC request`);
   }
 
-  const { results, allUnchanged } = await computeResults(baselines, { accept, recover, store });
-  const extraHeaders = { 'Sync-Delta-Complete': 'true' };
+  const { results, allUnchanged } = await computeResults(baselines, { accept, recover, store, context });
+  const extraHeaders = { 'Sync-Delta-Complete': '?1' };
   if (allUnchanged) return { status: 204, extraHeaders, body: null };
   return { status: 200, extraHeaders, body: { results, synced_at: new Date().toISOString() } };
 }
 
-async function processSync(socket, bodyStr, headers = {}, keepAlive = false, store) {
+async function processSync(socket, bodyStr, headers = {}, keepAlive = false, store, target = '/') {
   let r;
   try {
-    r = await resolveSync(bodyStr, headers, store);
+    r = await resolveSync(bodyStr, headers, { store, context: { method: 'SYNC', target, headers } });
   } catch (err) {
     console.error('SYNC store error:', err);
     return sendResponse(socket, 500, 'Internal Server Error', {}, { error: 'Internal error' }, '', false);

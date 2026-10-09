@@ -2,7 +2,7 @@
 
 const http = require('http');
 const net = require('net');
-const { createSyncServer, createMemoryStore, syncOverPost } = require('../src/package');
+const { createSyncServer, createMemoryStore, syncHandler } = require('../src/package');
 const { createSyncClient, syncFetch } = require('../../client/src/index');
 const { resetTransportCache } = require('../../client/src/fetch-client');
 
@@ -85,14 +85,20 @@ describe('createSyncClient against createSyncServer', () => {
     expect(values['/users'][1].name).toBe('Ann');
   });
 
-  test('Uses the SYNC method when the path allows it', async () => {
+  test('Uses QUERY by default', async () => {
     const res = await syncFetch(url, { '/users': null });
+    expect(res.transport).toBe('QUERY');
+    expect(res.status).toBe(200);
+  });
+
+  test('transport "method" uses the dedicated SYNC method', async () => {
+    const res = await syncFetch(url, { '/users': null }, { transport: 'method' });
     expect(res.transport).toBe('SYNC');
     expect(res.status).toBe(200);
   });
 });
 
-describe('createSyncClient against a plain Node server that rejects SYNC', () => {
+describe('createSyncClient against a plain Node server whose path rejects QUERY', () => {
   let server, url;
   const methods = [];
 
@@ -100,8 +106,12 @@ describe('createSyncClient against a plain Node server that rejects SYNC', () =>
     resetTransportCache();
     const store = createMemoryStore();
     store.addVersion('/a', 'a1', { k: 1 });
-    const post = syncOverPost({ store });
-    server = http.createServer((req, res) => { methods.push(req.method); post(req, res, () => { res.statusCode = 404; res.end(); }); });
+    const handle = syncHandler({ store });
+    server = http.createServer((req, res) => {
+      methods.push(req.method);
+      if (req.method === 'QUERY') { res.statusCode = 405; return res.end(); }
+      handle(req, res, () => { res.statusCode = 404; res.end(); });
+    });
     url = `http://127.0.0.1:${await listen(server)}/sync`;
   });
   afterAll(done => { server.closeAllConnections(); server.close(done); });

@@ -3,20 +3,20 @@
 const net = require('net');
 const http = require('http');
 const { processSync, sendResponse, MAX_BODY_BYTES, MAX_HEADER_BYTES } = require('./sync-handler');
-const { syncOverPost } = require('./post-form');
+const { syncHandler } = require('./handler');
 
 const IDLE_TIMEOUT_MS = 30_000;
 
 function parseHead(headBuf) {
   const lines = headBuf.toString('utf8').split('\r\n');
-  const [method, , version = 'HTTP/1.1'] = lines[0].split(' ');
+  const [method, target = '/', version = 'HTTP/1.1'] = lines[0].split(' ');
   const headers = {};
   for (let i = 1; i < lines.length; i++) {
     const colon = lines[i].indexOf(':');
     if (colon === -1) continue;
     headers[lines[i].slice(0, colon).trim().toLowerCase()] = lines[i].slice(colon + 1).trim();
   }
-  return { method, version, headers };
+  return { method, target, version, headers };
 }
 
 function wantsKeepAlive(version, headers) {
@@ -25,14 +25,16 @@ function wantsKeepAlive(version, headers) {
   return version === 'HTTP/1.1' || conn.includes('keep-alive');
 }
 
-// Raw TCP front: bypasses llhttp's method validation. SYNC requests are handled
-// here, several per connection. The first request with any other method hands the
-// rest of that connection to the app, so a connection that mixes SYNC with other
-// methods is not supported (use the POST form for those clients).
+// Adds the optional dedicated SYNC method on top of syncHandler (QUERY and POST),
+// which most deployments should use directly. Node's parser rejects unknown methods,
+// so this front reads raw TCP: SYNC requests are handled here, several per connection,
+// and the first request with any other method hands the rest of that connection to
+// the app. A connection that mixes the SYNC method with other methods is therefore
+// not supported; clients that need that use QUERY.
 function createSyncServer({ app, store } = {}) {
-  const postForm = syncOverPost({ store });
+  const handle = syncHandler({ store });
   const fallback = app || ((req, res) => { res.statusCode = 404; res.end(); });
-  const appServer = http.createServer((req, res) => postForm(req, res, () => fallback(req, res)));
+  const appServer = http.createServer((req, res) => handle(req, res, () => fallback(req, res)));
   let internalPort = null;
   const openSockets = new Set();
 
@@ -80,7 +82,7 @@ function createSyncServer({ app, store } = {}) {
           return;
         }
 
-        const { version, headers } = parseHead(buffer.slice(0, headerEnd));
+        const { version, headers, target } = parseHead(buffer.slice(0, headerEnd));
         const bodyStart = headerEnd + 4;
 
         if (headers['transfer-encoding']) {
@@ -100,7 +102,7 @@ function createSyncServer({ app, store } = {}) {
         buffer = buffer.slice(bodyStart + contentLength);
         const keepAlive = wantsKeepAlive(version, headers);
 
-        await processSync(socket, bodyStr, headers, keepAlive, store);
+        await processSync(socket, bodyStr, headers, keepAlive, store, target);
         if (!keepAlive) {
           socket.removeListener('data', onData);
           return;

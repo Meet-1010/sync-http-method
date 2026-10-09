@@ -4,7 +4,7 @@ const http = require('http');
 const net = require('net');
 const express = require('express');
 const { startServer, stopServer } = require('../src/index');
-const { syncOverPost } = require('../src/post-form');
+const { syncHandler } = require('../src/handler');
 const { syncRequest, resetTransportCache } = require('../../client/src/sync-client');
 
 const PORT = 3003;
@@ -123,8 +123,8 @@ describe('POST form', () => {
     expect(res.status).toBe(204);
   });
 
-  test('422 on malformed JSON', async () => {
-    expect((await post('/x', '{ nope')).status).toBe(422);
+  test('400 on content that is not valid JSON', async () => {
+    expect((await post('/x', '{ nope')).status).toBe(400);
   });
 
   // Also guards the raw front's hand-off to Express: bytes arriving while the upstream connects must not be dropped.
@@ -162,18 +162,21 @@ function recentOnlyStore() {
   };
 }
 
-function plainExpress(store) {
+// rejectQuery simulates a server or intermediary on the path that does not allow QUERY.
+function plainExpress(store, { rejectQuery = false, cacheControl } = {}) {
   const app = express();
   const seen = { methods: [] };
   app.use((req, res, next) => { seen.methods.push(req.method); next(); });
-  app.use(syncOverPost({ store }));
+  if (rejectQuery) app.use((req, res, next) => (req.method === 'QUERY' ? res.status(405).end() : next()));
+  app.use(syncHandler({ store, cacheControl }));
+  app.use((req, res) => res.status(418).end('app'));
   const server = http.createServer(app);
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({
     port: server.address().port, seen, close: () => new Promise(r => { server.closeAllConnections(); server.close(r); }),
   })));
 }
 
-describe('Plain Express app that rejects the SYNC method', () => {
+describe('Plain Express app (no raw-TCP front)', () => {
   let app, store;
   beforeEach(async () => { store = recentOnlyStore(); app = await plainExpress(store); });
   afterEach(() => app.close());
@@ -183,18 +186,32 @@ describe('Plain Express app that rejects the SYNC method', () => {
     expect([400, 'error']).toContain(res.status);
   });
 
-  test('transport "auto" falls back to POST and succeeds', async () => {
+  test('transport "auto" uses QUERY, which Node supports natively', async () => {
     const res = await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v2' });
     expect(res.status).toBe(200);
-    expect(res.transport).toBe('POST');
+    expect(res.transport).toBe('QUERY');
     expect(res.body.results['/doc']).toMatchObject({ status: 200, from: 'v2', to: 'v3' });
   });
 
-  test('After one fallback the client goes straight to POST', async () => {
-    await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v2' });
-    const before = app.seen.methods.length;
-    await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v2' });
-    expect(app.seen.methods.slice(before)).toEqual(['POST']);
+  test('Responses advertise the query format with Accept-Query (RFC 10008 Section 3)', async () => {
+    const res = await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v2' }, { transport: 'query' });
+    expect(res.headers['accept-query']).toBe('"application/sync-baseline+json"');
+  });
+
+  test('Default Cache-Control is no-store', async () => {
+    const res = await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v2' }, { transport: 'query' });
+    expect(res.headers['cache-control']).toBe('no-store');
+  });
+
+  test('A QUERY with another media type is left to the app', async () => {
+    const res = await new Promise((resolve, reject) => {
+      const body = '$.items';
+      const req = http.request({ host: '127.0.0.1', port: app.port, path: '/x', method: 'QUERY', agent: false,
+        headers: { 'Content-Type': 'application/jsonpath', 'Content-Length': body.length } }, r => { r.resume(); r.on('end', () => resolve(r.statusCode)); });
+      req.on('error', reject);
+      req.end(body);
+    });
+    expect(res).toBe(418);
   });
 
   test('Async recent-only store: a token it cannot reconstruct gets a snapshot', async () => {
@@ -206,6 +223,83 @@ describe('Plain Express app that rejects the SYNC method', () => {
     const res = await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v2', '/nope': null }, { transport: 'post' });
     expect(res.body.results['/nope']).toEqual({ status: 404 });
     expect(store.calls.getCurrent).toBe(2);
+  });
+});
+
+describe('Path that rejects QUERY', () => {
+  let app;
+  beforeEach(async () => { app = await plainExpress(recentOnlyStore(), { rejectQuery: true }); });
+  afterEach(() => app.close());
+
+  test('transport "auto" falls back to POST and succeeds', async () => {
+    const res = await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v2' });
+    expect(res.status).toBe(200);
+    expect(res.transport).toBe('POST');
+  });
+
+  test('After one fallback the client goes straight to POST', async () => {
+    await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v2' });
+    const before = app.seen.methods.length;
+    await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v2' });
+    expect(app.seen.methods.slice(before)).toEqual(['POST']);
+  });
+});
+
+describe('strict mode (RFC 10008 Section 2.1)', () => {
+  const query = (port, headers, body = '{}') => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: '/sync', method: 'QUERY', agent: false, headers: { ...headers, 'Content-Length': body.length } },
+      r => { r.resume(); r.on('end', () => resolve(r)); });
+    req.on('error', reject);
+    req.end(body);
+  });
+
+  test('QUERY without Content-Type gets 400 and Accept-Query', async () => {
+    const server = http.createServer((req, res) => syncHandler({ store: recentOnlyStore(), strict: true })(req, res, () => res.end()));
+    const port = await new Promise(r => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+    const r = await query(port, {});
+    server.close();
+    expect(r.statusCode).toBe(400);
+    expect(r.headers['accept-query']).toBe('"application/sync-baseline+json"');
+  });
+
+  test('QUERY with another format gets 415 and Accept-Query', async () => {
+    const server = http.createServer((req, res) => syncHandler({ store: recentOnlyStore(), strict: true })(req, res, () => res.end()));
+    const port = await new Promise(r => server.listen(0, '127.0.0.1', () => r(server.address().port)));
+    const r = await query(port, { 'Content-Type': 'application/jsonpath' }, '$.x');
+    server.close();
+    expect(r.statusCode).toBe(415);
+    expect(r.headers['accept-query']).toBe('"application/sync-baseline+json"');
+  });
+});
+
+describe('Cache-Control option', () => {
+  test('Public data can opt in to shared caching of QUERY responses', async () => {
+    const app = await plainExpress(recentOnlyStore(), { cacheControl: 'public, max-age=5' });
+    const res = await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v2' }, { transport: 'query' });
+    expect(res.headers['cache-control']).toBe('public, max-age=5');
+    await app.close();
+  });
+});
+
+describe('Per-resource authorization', () => {
+  test('The store sees the request context and can hide resources (404)', async () => {
+    const seen = [];
+    const store = {
+      getCurrent(resource, ctx) {
+        seen.push(ctx);
+        if (resource === '/private' && ctx.headers.authorization !== 'Bearer ok') return null;
+        return { id: 'v1', data: { r: resource } };
+      },
+      getVersion: () => null,
+    };
+    const app = await plainExpress(store);
+    const anon = await syncRequest(`http://127.0.0.1:${app.port}/sync`, { '/public': null, '/private': null }, { transport: 'query' });
+    const authed = await syncRequest(`http://127.0.0.1:${app.port}/sync`, { '/private': null }, { transport: 'query', headers: { Authorization: 'Bearer ok' } });
+    await app.close();
+    expect(anon.body.results['/private']).toEqual({ status: 404 });
+    expect(anon.body.results['/public'].status).toBe(200);
+    expect(authed.body.results['/private'].data).toEqual({ r: '/private' });
+    expect(seen[0]).toMatchObject({ method: 'QUERY', target: '/sync' });
   });
 });
 

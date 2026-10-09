@@ -4,13 +4,16 @@ const { applyResult, JSON_PATCH, MERGE_PATCH } = require('./apply');
 
 const SYNC_TYPE = 'application/sync-baseline+json';
 const RESULT_TYPE = 'application/sync-result+json';
-const FALLBACK_STATUSES = new Set([400, 405, 501]);
+// A server or intermediary that does not support QUERY for this resource typically
+// answers 400, 404, 405, 415 or 501, or drops the request (fetch rejects with TypeError).
+const FALLBACK_STATUSES = new Set([400, 404, 405, 415, 501]);
 
-// Origins where the SYNC method failed and the POST form worked.
+// Origins where QUERY failed and POST worked.
 const postOnly = new Set();
 
 // Low-level request with any fetch implementation (browsers, Node 18+, Deno, Bun).
-// transport: 'auto' (try SYNC, fall back to POST and remember), 'method', or 'post'.
+// transport: 'auto' (QUERY, falling back to POST and remembering per origin),
+//            'query', 'post', or 'method' (the dedicated SYNC method).
 async function syncFetch(url, baselines, { fetch: fetchImpl = globalThis.fetch, transport = 'auto', accept, recover, headers, signal } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('No fetch implementation available; pass { fetch }');
   const origin = new URL(url, globalThis.location?.href).origin;
@@ -27,19 +30,22 @@ async function syncFetch(url, baselines, { fetch: fetchImpl = globalThis.fetch, 
       signal,
     });
     const text = await res.text();
-    return { status: res.status, headers: res.headers, body: text ? JSON.parse(text) : null, transport: method };
+    let parsed = null;
+    if (text) {
+      try { parsed = JSON.parse(text); } catch { parsed = text; }
+    }
+    return { status: res.status, headers: res.headers, body: parsed, transport: method };
   };
 
   if (transport === 'post' || (transport === 'auto' && postOnly.has(origin))) return send('POST');
+  if (transport === 'query') return send('QUERY');
   if (transport === 'method') return send('SYNC');
 
   let res;
   try {
-    res = await send('SYNC');
+    res = await send('QUERY');
   } catch (err) {
-    // fetch rejects with TypeError on network or CORS failure, which is how an
-    // intermediary that drops unknown methods usually shows up.
-    if (err.name !== 'TypeError') throw err;
+    if (err.name !== 'TypeError' || signal?.aborted) throw err;
   }
   if (res && !FALLBACK_STATUSES.has(res.status)) return res;
 

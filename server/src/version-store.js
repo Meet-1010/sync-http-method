@@ -56,7 +56,7 @@ demo.addVersion('/users', 'v3', {
 demo.addVersion('/posts', 'v1', { '/posts/1': { id: 1, title: 'Hello World', body: 'First post' } });
 demo.addVersion('/posts', 'v2', {
   '/posts/1': { id: 1, title: 'Hello World', body: 'First post' },
-  '/posts/2': { id: 2, title: 'SYNC Method', body: 'A new HTTP method' },
+  '/posts/2': { id: 2, title: 'SYNC', body: 'Catching up many resources in one request' },
 });
 
 demo.addVersion('/config', 'v1', { '/config/timeout': 10, '/config/retries': 3 });

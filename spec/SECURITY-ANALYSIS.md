@@ -1,6 +1,6 @@
-# SYNC HTTP Method: Security Analysis (revision -01)
+# SYNC: Security Analysis
 
-This document accompanies `SYNC-method-draft.md`. Terminology follows the draft: a client sends a **baseline map** (resource to opaque version token or `null`) and receives one **result** per resource.
+This document accompanies `SYNC-method-draft.md`. Terminology follows the draft: a client sends a QUERY request to a **sync resource** with a set of **baselines** (resource name to opaque version token or `null`) and receives one **result** per resource. The same content may be sent with `POST` as a fallback.
 
 ## 1. Threat Model
 
@@ -20,6 +20,7 @@ This document accompanies `SYNC-method-draft.md`. Terminology follows the draft:
 | Version-token space | Enumeration maps server history |
 | Server compute | Large batches multiply per-request work |
 | Resource namespace | Per-resource status can reveal which resources exist |
+| Shared caches | Cacheable QUERY responses can leak one requester's results to another |
 
 ## 2. Implementation Status of Mitigations
 
@@ -30,13 +31,15 @@ The reference server is a research implementation. This table says which mitigat
 | Max 100 resources per request, `413` | Implemented |
 | Max 64 KiB request body, `413` before buffering | Implemented |
 | Max 16 KiB header section, `431` | Implemented |
-| `Cache-Control: no-store` on responses | Implemented |
 | Client checks `from` equals held baseline before applying | Implemented in `client/src/apply.js` |
 | Per-resource failure isolation (no whole-request failure from one bad entry) | Implemented |
 | Prototype-pollution-safe handling of resource names such as `__proto__` | Implemented, tested |
+| Resource names restricted to absolute paths on the same origin (no scheme, authority or fragment) | Implemented, tested |
+| Per-resource authorization hook: the store receives the request context and can hide resources as `404` | Implemented, tested (the policy itself is the application's) |
+| `Cache-Control: no-store` by default, public caching only by explicit configuration | Implemented, tested |
 | Opaque, unguessable tokens | **Not implemented.** Demo data uses `v1`, `v2`; a deployment must not |
 | TLS | **Not implemented.** Run behind a TLS terminator |
-| Authentication and per-resource authorization | **Not implemented** |
+| Authentication | **Not implemented**; the application supplies it |
 | Rate limiting | **Not implemented** |
 | Per-request computation time bound | **Not implemented** |
 | Signed results (`HMAC`) | **Not implemented**, optional in the draft |
@@ -100,22 +103,33 @@ Mercure documents a related leak: its event cursors let a subscriber infer the e
 
 **Mitigations**
 
-- Authorization MUST be evaluated per resource, as it would be for GET on that resource.
+- Authorization MUST be evaluated per resource, as it would be for GET on that resource. The reference implementation passes the request context (method, target, headers) to the store for this purpose.
 - For resources the caller may not read, servers SHOULD return the same result as for a nonexistent resource (`404`).
 - Patches MUST NOT include data the caller is not authorized to read, even if the baseline would have allowed it at an earlier time (permissions can be revoked between versions).
 
-### f) Compression side channels
+### f) Shared caching of QUERY responses
+
+**Description.** Responses to QUERY are cacheable, with the request content in the cache key (RFC 10008, Section 2.7). Two requesters that send the same baselines get the same cache key. If the results depend on who is asking and a shared cache stores the first response, the second requester can receive data it is not allowed to read.
+
+**Mitigations**
+
+- Responses whose results depend on authorization MUST NOT be stored by shared caches: send `Cache-Control: private` or `no-store`. The reference handler sends `no-store` unless configured otherwise.
+- Only make responses publicly cacheable when the results are identical for every requester.
+- Servers MUST treat semantically equivalent request content identically, because caches may normalize the content before computing the key (RFC 10008, Section 2.7); otherwise normalization can return a wrong response.
+- URIs assigned to results or queries (`Content-Location`, `Location`) MUST NOT embed version tokens or resource names.
+
+### g) Compression side channels
 
 **Description.** The reference server and client now support gzip for large results. Compressing responses that contain secrets together with attacker-influenced text, over TLS, enables length-based attacks of the BREACH family. In SYNC, resource names from the request are echoed as keys in `results`, and snapshots can contain sensitive values.
 
 **Mitigations**
 
 - Servers SHOULD NOT compress results that mix secrets with request-controlled content unless the attacker cannot cause a victim's client to send chosen SYNC requests.
-- SYNC is not a CORS-safelisted method, so browsers preflight cross-origin SYNC requests; servers SHOULD NOT list SYNC in `Access-Control-Allow-Methods` for untrusted origins. This substantially narrows the cross-origin path to this attack.
+- QUERY is not a CORS-safelisted method, and `application/sync-baseline+json` is not a safelisted request content type, so browsers preflight cross-origin SYNC requests sent with either QUERY or POST. Servers SHOULD NOT allow them from untrusted origins. This substantially narrows the cross-origin path to this attack.
 
-### g) Cross-origin requests
+### h) Cross-origin requests
 
-Because SYNC is not CORS-safelisted, a cross-origin page cannot send it without a successful preflight. Servers SHOULD NOT reflect arbitrary origins in `Access-Control-Allow-Origin` for SYNC endpoints, and SHOULD require an authentication mechanism (such as a bearer token) that a cross-origin page cannot attach on its own.
+Because neither QUERY nor a POST with this content type is CORS-safelisted, a cross-origin page cannot send a SYNC request without a successful preflight. Servers SHOULD NOT reflect arbitrary origins in `Access-Control-Allow-Origin` for sync resources, and SHOULD require an authentication mechanism (such as a bearer token) that a cross-origin page cannot attach on its own.
 
 ## 4. Transport Requirements
 
@@ -132,9 +146,9 @@ Because SYNC is not CORS-safelisted, a cross-origin page cannot send it without 
 | Requires client-supplied state | No | Yes (baselines) |
 | Safe | Yes | Yes |
 | Cost per request | One resource | Up to the resource cap |
-| Cacheable | Yes | Not specified; `no-store` recommended |
+| Cacheable | Yes | Yes (as QUERY); `private` or `no-store` when results depend on the requester |
 
-The new surface relative to GET is baseline probing (3c) and batching (3d, 3e). The first is shared with every resume-cursor protocol; the second is specific to multi-resource requests.
+The new surface relative to GET is baseline probing (3c), batching (3d, 3e), and caching of responses whose cache key is the request content (3f). The first is shared with every resume-token protocol; the second is specific to multi-resource requests; the third is shared with every use of QUERY.
 
 ## 6. What This Analysis Does Not Cover
 

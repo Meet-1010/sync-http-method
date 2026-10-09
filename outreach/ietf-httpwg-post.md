@@ -1,3 +1,5 @@
+> **Archived: as sent to ietf-http-wg on 2026-10-05.** Superseded by the QUERY-based design in `spec/SYNC-method-draft.md`; its benchmark figure and method framing are no longer current.
+
 # IETF httpbis Mailing List Post
 
 **To:** ietf-http-wg@w3.org

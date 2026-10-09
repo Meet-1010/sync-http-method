@@ -1,32 +1,32 @@
 # Show HN Post
 
-**Title:** Show HN: SYNC – one HTTP request to catch up many resources, per-resource results
+**Title:** Show HN: SYNC – catch up many HTTP resources in one QUERY request
 
 ---
 
-If a client holds copies of several resources and needs to bring them current, HTTP gives you two standard options: GET everything again, or conditional GET, which returns the whole resource if any byte changed. Everything finer-grained is a custom API.
+If a client holds copies of several resources and needs to bring them current, HTTP gives you two standard options: GET everything again, or conditional GET, which re-sends the whole resource if any byte changed. Anything finer-grained is a custom API.
 
-There is good prior work in this area, and I want to be upfront about it. Braid-HTTP lets a GET carry a `Parents` header and returns updates since that version, for one resource. Mercure and Events Query push updates over long-lived connections. JMAP has `/changes` with state tokens inside its own protocol. SYNC is a small proposal for one narrow slice: a stateless pull that names many resources in one request and returns an independent result for each.
+SYNC is a small format for the new HTTP QUERY method (RFC 10008): you send the versions you hold for many resources in one request, and get an independent result per resource (a patch, "unchanged", or the full resource).
 
 ```
-SYNC /api HTTP/1.1
-{"baselines": {"/users": "v42", "/posts": "v18", "/config": null},
- "accept": ["application/merge-patch+json", "application/json-patch+json"]}
+QUERY /sync
+Content-Type: application/sync-baseline+json
 
--> /users: patch   /posts: 304   /config: snapshot   /gone: 404
+{"baselines": {"/users": "v42", "/posts": "v18", "/config": null}}
+
+-> /users: patch   /posts: 304   /config: full   /gone: 404
 ```
 
-A stale token for one resource doesn't fail the others, and the server falls back to a snapshot when it is smaller than the patch.
+It started as a proposal for a brand-new HTTP method. On the IETF HTTP list, Julian Reschke asked how that differed from QUERY, and the honest answer was "it doesn't", so it is now a QUERY format. That also means it runs on stock Node and in browsers, and QUERY responses are cacheable.
 
-I measured it against full GET, conditional GET, and models of Braid-style and Mercure-style catch-up on real sockets with a simulated 40 ms RTT. The honest summary:
+There is good prior work here: Braid-HTTP (per-resource versions, subscriptions, merging), Mercure (pub/sub with replay), Events Query, JMAP. SYNC covers one narrow slice: a stateless pull for many resources at once. I benchmarked it against the real braid-http library and the real Mercure hub, catching up 100 resources after one round of change:
 
-- With minimal headers and no compression, SYNC, Braid over HTTP/2, and a Mercure-style replay are within a few percent of each other.
-- With realistic request headers and gzip, catching up 100 resources after one round of change took 6.7 KB with SYNC vs 36 KB for per-resource HTTP/2 requests and 90 KB over HTTP/1.1.
-- For a single resource there is no consistent advantage.
-- Over HTTP/1.1, request count dominates: ~750 ms vs ~100 ms at 100 resources.
+- Minimal headers, no compression: SYNC 21.9 KB, Mercure 23.6 KB, Braid 58.9 KB (100 connections).
+- Realistic headers + gzip: SYNC 5.2 KB, Mercure 25.1 KB, Braid 108.5 KB. Part of that is that Braid and Mercure don't compress by default.
+- Braid's whole-item patches win when many changes pile up; for a single resource there is no consistent winner.
 
-The Braid and Mercure servers in the benchmark are my own minimal models of the drafts, not their reference implementations, so treat the comparison accordingly. The reference server (Node) uses a raw `net.createServer` because Node's HTTP parser rejects unknown methods before any middleware runs.
+`npm install sync-http-method` gives you `createSyncClient(url).sync([...])` for the browser or Node and `syncHandler({ store })` for Express or any Node server.
 
-Repo with spec, security analysis, tests, and the benchmark (`npm run bench`): https://github.com/Meet-1010/sync-http-method
+Spec, security analysis, benchmark and paper: https://github.com/Meet-1010/sync-http-method
 
-Interested in whether it makes more sense as a new method or as a profile of QUERY, and in comparisons against the real Braid and Mercure implementations.
+I'd welcome criticism of the format, and comparisons in browsers and over TLS, which I haven't measured.
