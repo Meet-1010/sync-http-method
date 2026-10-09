@@ -4,7 +4,7 @@ const http = require('http');
 const net = require('net');
 const express = require('express');
 const { startServer, stopServer } = require('../src/index');
-const { syncOverPost } = require('../src/express-middleware');
+const { syncOverPost } = require('../src/post-form');
 const { syncRequest, resetTransportCache } = require('../../client/src/sync-client');
 
 const PORT = 3003;

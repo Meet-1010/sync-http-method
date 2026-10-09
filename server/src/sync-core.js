@@ -1,6 +1,6 @@
 'use strict';
 
-const memoryStore = require('./version-store');
+const { demoStore } = require('./version-store');
 const { buildUpdate, SNAPSHOT } = require('./delta-engine');
 
 const MAX_RESOURCES = 100;
@@ -9,10 +9,7 @@ const MAX_RESOURCES = 100;
 //   getCurrent(resource)        -> { id, data } | null
 //   getVersion(resource, token) -> { id, data } | null   (null = cannot reconstruct that state)
 // A store that only keeps recent versions is valid: older tokens get a snapshot.
-const defaultStore = {
-  getCurrent: memoryStore.getCurrentVersion,
-  getVersion: memoryStore.getVersion,
-};
+const defaultStore = demoStore;
 
 async function resolveOne(store, resource, token, { accept, recover }) {
   const current = await store.getCurrent(resource);

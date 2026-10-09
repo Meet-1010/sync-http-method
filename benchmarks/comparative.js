@@ -12,7 +12,8 @@ const zlib = require('zlib');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
-const jsonpatch = require('fast-json-patch');
+const crypto = require('crypto');
+const { braidify, fetch: braidFetch } = require('braid-http');
 
 const { startServer, stopServer, server: syncNetServer } = require('../server/src/index');
 const { addVersion } = require('../server/src/version-store');
@@ -48,12 +49,21 @@ const PROFILES = {
   },
 };
 
+// Real third-party software: braid-http (npm) and the Mercure hub (Docker image dunglas/mercure),
+// started with the command in benchmarks/README.md. Without a reachable hub, its column is skipped.
+const MERCURE_URL = process.env.MERCURE_URL || 'http://127.0.0.1:3480';
+const MERCURE_PUBLISHER_KEY = process.env.MERCURE_PUBLISHER_KEY || 'bench-publisher-secret-key-0123456789abcdef';
+const MERCURE_SUBSCRIBER_KEY = process.env.MERCURE_SUBSCRIBER_KEY || 'bench-subscriber-secret-key-0123456789abcdef';
+
 const PROTOCOLS = [
   ['GET (full)', 'getFull'],
   ['GET + ETag', 'getEtag'],
-  ['Braid-style H1', 'braidH1'],
-  ['Braid-style H2', 'braidH2'],
-  ['Mercure-style', 'mercure'],
+  ['Braid model H1', 'braidH1'],
+  ['Braid model H2', 'braidH2'],
+  ['Braid real', 'braidReal'],
+  ['Braid real mux', 'braidMux'],
+  ['Mercure model', 'mercure'],
+  ['Mercure real', 'mercureReal'],
   ['SYNC', 'sync'],
 ];
 
@@ -120,7 +130,7 @@ const entryAt = (h, L) => h.filter(e => e.round <= L).pop();
 // ── Latency + byte-counting TCP proxy ────────────────────────────────────────
 
 function startProxy(targetPort, oneWayMs) {
-  const stats = { up: 0, down: 0 };
+  const stats = { up: 0, down: 0, connections: 0 };
   const sockets = new Set();
 
   // Strict FIFO per direction: independent timers with equal deadlines may fire out of order.
@@ -152,6 +162,7 @@ function startProxy(targetPort, oneWayMs) {
   }
 
   const srv = net.createServer(client => {
+    stats.connections++;
     const upstream = net.connect(targetPort, '127.0.0.1');
     sockets.add(client); sockets.add(upstream);
     pipe(client, upstream, 'up', true);
@@ -239,6 +250,96 @@ function makeHandler(ctx) {
 
 const listen = (srv) => new Promise(r => srv.listen(0, '127.0.0.1', () => r(srv.address().port)));
 const close = (srv) => new Promise(r => srv.close(r));
+
+// ── Real Braid server (braid-http) and Mercure hub helpers ──────────────────
+
+function braidUpdate(base, cur) {
+  const keys = Object.keys(cur.data).filter(k => JSON.stringify(base.data[k]) !== JSON.stringify(cur.data[k]));
+  const patches = keys.map(k => ({ unit: 'json', range: `[${JSON.stringify(k)}]`, content: JSON.stringify(cur.data[k]) }));
+  const patchBytes = patches.reduce((n, p) => n + p.range.length + p.content.length, 0);
+  const snapshot = JSON.stringify(cur.data);
+  return patchBytes < snapshot.length ? { patches } : { body: snapshot };
+}
+
+function makeBraidHandler(ctx) {
+  return (req, res) => {
+    const i = Number(req.url.split('/')[2]);
+    const cur = entryAt(ctx.history[i], ctx.L);
+    const parent = req.parents?.[0];
+    res.setHeader('Current-Version', `"${cur.token}"`);
+    if (req.subscribe) {
+      res.startSubscription({ onClose() {} });
+      if (parent === cur.token) return;
+    } else if (parent === cur.token) {
+      res.statusCode = 304;
+      return res.end();
+    } else {
+      res.statusCode = 200;
+    }
+    const base = ctx.history[i].find(e => e.token === parent);
+    res.sendUpdate({ version: [cur.token], parents: [parent], ...braidUpdate(base, cur) });
+    if (!req.subscribe) res.end();
+  };
+}
+
+function applyBraid(local, update) {
+  const text = v => (typeof v === 'string' ? v : Buffer.from(v).toString('utf8'));
+  if (update.patches) {
+    const out = clone(local);
+    for (const p of update.patches) out[JSON.parse(p.range)[0]] = JSON.parse(p.content_text ?? text(p.content));
+    return out;
+  }
+  return JSON.parse(update.body_text ?? text(update.body));
+}
+
+function mercureToken(action, audience, key) {
+  const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const h = b64({ alg: 'HS256', typ: 'at+jwt' });
+  const p = b64({
+    iss: 'https://localhost', aud: audience, sub: 'bench', client_id: 'bench', iat: now, exp: now + 3600, jti: crypto.randomUUID(),
+    authorization_details: [{ type: 'https://mercure.rocks/authorization-detail', actions: [action], topics: [{ match: '*' }] }],
+  });
+  return `${h}.${p}.${crypto.createHmac('sha256', key).update(`${h}.${p}`).digest('base64url')}`;
+}
+
+async function mercurePublish(topic, data) {
+  const res = await fetch(`${MERCURE_URL}/.well-known/mercure`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${mercureToken('publish', `${MERCURE_URL}/.well-known/mercure`, MERCURE_PUBLISHER_KEY)}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ topic, data }),
+  });
+  if (res.status !== 200) throw new Error(`Mercure publish failed: ${res.status}`);
+  return res.text();
+}
+
+async function mercureAvailable() {
+  try {
+    return (await fetch(MERCURE_URL, { signal: AbortSignal.timeout(1500) })).status === 200;
+  } catch {
+    return false;
+  }
+}
+
+// Publishes this configuration's history to the hub; the subscriber later resumes from the marker.
+async function mercureSetup(ctx, prefix) {
+  const topic = i => `${prefix}/r/${i}`;
+  const marker = await mercurePublish(`${prefix}/marker`, 'start');
+  let count = 0;
+  for (let r = 1; r <= ctx.L; r++) {
+    for (let i = 0; i < ctx.N; i++) {
+      const idx = ctx.history[i].findIndex(e => e.round === r);
+      if (idx < 1) continue;
+      const u = buildUpdate(ctx.history[i][idx - 1].data, ctx.history[i][idx].data, [JSON_PATCH]);
+      await mercurePublish(topic(i), JSON.stringify({ topic: i, format: u.format, data: u.data }));
+      count++;
+    }
+  }
+  return { marker, count, topic };
+}
 
 // ── Clients ──────────────────────────────────────────────────────────────────
 
@@ -353,6 +454,67 @@ const RUNNERS = {
     return { local, requests: 1 };
   },
 
+  async braidReal(ctx, port) {
+    const local = baselineState(ctx.history);
+    const headers = clientHeaders(ctx.profile);
+    await Promise.all(local.map(async (_, i) => {
+      const r = await braidFetch(`http://127.0.0.1:${port}/braid/${i}`, { parents: ['v0'], headers });
+      if (r.status === 200) local[i] = applyBraid(local[i], await r.update());
+      else await r.arrayBuffer();
+    }));
+    return { local, requests: ctx.N };
+  },
+
+  async braidMux(ctx, port) {
+    const local = baselineState(ctx.history);
+    const headers = clientHeaders(ctx.profile);
+    const ac = new AbortController();
+    await Promise.all(local.map(async (_, i) => {
+      const s = await braidFetch(`http://127.0.0.1:${port}/braid/${i}`, { parents: ['v0'], subscribe: true, multiplex: true, signal: ac.signal, headers });
+      if (s.headers.get('current-version') === '"v0"') return;
+      await new Promise((done, fail) => s.subscribe(u => { local[i] = applyBraid(local[i], u); done(); }, fail));
+    }));
+    // Bytes are counted at catch-up, before cancelling: a real client keeps these subscriptions open.
+    // Cancellation sends DELETEs that the library retries forever, so they must finish before the proxy closes.
+    return { local, requests: ctx.N + 1, cleanup: async () => { ac.abort(); await new Promise(r => setTimeout(r, 15 * RTT_MS)); } };
+  },
+
+  async mercureReal(ctx, port) {
+    const { marker, count, topic } = ctx.mercure;
+    const local = baselineState(ctx.history);
+    const query = Array.from({ length: ctx.N }, (_, i) => `match=${encodeURIComponent(topic(i))}`).join('&');
+    const headers = { ...ctx.profile.headers, 'Last-Event-ID': marker };
+    delete headers.Authorization;
+    if (ctx.profile.headers.Authorization) {
+      headers.Authorization = `Bearer ${mercureToken('subscribe', `http://127.0.0.1:${port}/.well-known/mercure`, MERCURE_SUBSCRIBER_KEY)}`;
+    }
+    if (ctx.profile.gzip) headers['Accept-Encoding'] = 'gzip';
+
+    const events = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, path: `/.well-known/mercure?${query}`, agent: false, headers }, res => {
+        if (res.statusCode !== 200) return reject(new Error(`Mercure subscribe failed: ${res.statusCode}`));
+        const stream = res.headers['content-encoding'] === 'gzip' ? res.pipe(zlib.createGunzip()) : res;
+        const evs = [];
+        let buf = '';
+        stream.on('data', c => {
+          buf += c;
+          let k;
+          while ((k = buf.indexOf('\n\n')) !== -1) {
+            const line = buf.slice(0, k).split('\n').find(l => l.startsWith('data: '));
+            buf = buf.slice(k + 2);
+            if (line) evs.push(JSON.parse(line.slice(6)));
+            if (evs.length === count) { req.destroy(); return resolve(evs); }
+          }
+        });
+      });
+      req.on('error', e => { if (!req.destroyed) reject(e); });
+      req.end();
+    });
+
+    for (const ev of events) local[ev.topic] = applyResult(local[ev.topic], null, { status: 200, format: ev.format, from: null, data: ev.data });
+    return { local, requests: 1 };
+  },
+
   async sync(ctx, port) {
     const local = baselineState(ctx.history);
     const baselines = {};
@@ -375,23 +537,28 @@ const RUNNERS = {
 const median = xs => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 
 async function runOnce(key, ctx, ports) {
-  const target = key === 'braidH2' ? ports.h2 : key === 'sync' ? ports.sync : ports.h1;
+  const target = { braidH2: ports.h2, sync: ports.sync, braidReal: ports.braid, braidMux: ports.braid, mercureReal: ports.mercure }[key] ?? ports.h1;
   const proxy = await startProxy(target, RTT_MS / 2);
   const t0 = performance.now();
   const out = await RUNNERS[key](ctx, proxy.port);
   const ms = performance.now() - t0;
   await new Promise(r => setTimeout(r, RTT_MS)); // let connection-teardown bytes pass through the proxy
-  const { up, down } = proxy.stats;
+  const { up, down, connections } = proxy.stats;
+  if (out.cleanup) await out.cleanup();
   await proxy.close();
 
   out.local.forEach((state, i) => assert.deepStrictEqual(state, entryAt(ctx.history[i], ctx.L).data, `${key}: resource ${i} diverged`));
-  return { up, down, ms, requests: out.requests };
+  return { up, down, ms, connections, requests: out.requests };
 }
 
 async function main() {
   await new Promise(r => startServer(0, r));
   const syncPort = syncNetServer.address().port;
   const results = [];
+  const hub = await mercureAvailable();
+  if (!hub) console.warn(`Mercure hub not reachable at ${MERCURE_URL}; skipping the "Mercure real" column.`);
+  const protocols = PROTOCOLS.filter(([, key]) => hub || key !== 'mercureReal');
+  const runId = Date.now().toString(36);
 
   for (const [profileKey, profile] of Object.entries(PROFILES)) {
     for (const N of NS) {
@@ -401,52 +568,63 @@ async function main() {
         for (let i = 0; i < N; i++) for (const e of history[i]) if (e.round <= L) addVersion(syncName(i), e.token, e.data);
 
         const ctx = { history, N, L, profile, syncName };
+        if (hub) ctx.mercure = await mercureSetup(ctx, `/bench/${runId}/${profileKey}/${N}/${L}`);
         const handler = makeHandler(ctx);
         const h1 = http.createServer(handler);
         const h2 = http2.createServer(handler);
-        const ports = { h1: await listen(h1), h2: await listen(h2), sync: syncPort };
+        const braidServer = http.createServer(braidify(makeBraidHandler(ctx)));
+        const ports = { h1: await listen(h1), h2: await listen(h2), braid: await listen(braidServer), sync: syncPort, mercure: Number(new URL(MERCURE_URL).port) };
 
         const row = { profile: profileKey, N, L, changed: history.filter(h => entryAt(h, L).round > 0).length, protocols: {} };
-        for (const [label, key] of PROTOCOLS) {
+        for (const [label, key] of protocols) {
           if (profileKey === Object.keys(PROFILES)[0] && N === NS[0] && L === LS[0]) await runOnce(key, ctx, ports); // warm-up
           const runs = [];
           for (let k = 0; k < REPS; k++) runs.push(await runOnce(key, ctx, ports));
-          row.protocols[label] = { up: runs[0].up, down: runs[0].down, requests: runs[0].requests, ms: median(runs.map(r => r.ms)) };
+          row.protocols[label] = { up: runs[0].up, down: runs[0].down, requests: runs[0].requests, connections: runs[0].connections, ms: median(runs.map(r => r.ms)) };
         }
         results.push(row);
         console.log(`done ${profileKey} N=${N} L=${L}`);
-        await close(h1); await close(h2);
+        braidServer.closeAllConnections();
+        await close(h1); await close(h2); await close(braidServer);
       }
     }
   }
 
   await new Promise(r => stopServer(r));
-  return results;
+  return { results, protocols };
 }
 
 // ── Report ───────────────────────────────────────────────────────────────────
 
 const kb = n => `${(n / 1024).toFixed(1)}`;
 
-function report(results) {
-  const labels = PROTOCOLS.map(p => p[0]);
-  let md = `# SYNC vs GET, Braid-style, and Mercure-style: catch-up benchmark\n\n`;
+function report({ results, protocols }) {
+  const labels = protocols.map(p => p[0]);
+  const braidVersion = JSON.parse(fs.readFileSync(path.join(path.dirname(require.resolve('braid-http')), 'package.json'), 'utf8')).version;
+  let md = `# SYNC vs GET, Braid, and Mercure: catch-up benchmark\n\n`;
   md += `**Run at:** ${new Date().toISOString()} on Node ${process.version}\n\n`;
   md += `## What is measured\n\n`;
   md += `A client holds N resources (100 items each, about 20 KB as JSON) at round 0. The server has advanced L rounds. Each round, about ${CHANGE_FRACTION * 100}% of resources change (at least one), and each changed resource has ${ITEMS_PER_CHANGE} of its 100 items modified. The client must bring all N resources current and its reconstructed state is checked against the server's (any mismatch aborts the run).\n\n`;
-  md += `- **Bytes** are measured at a TCP proxy between client and server and include HTTP/2 framing and all headers, both directions. TLS is not modelled.\n`;
+  md += `- **Bytes** are measured at a TCP proxy between client and server and include HTTP/2 framing and all headers, both directions. TCP and TLS handshakes are not included; the connection counts at the end of each section show where they would add cost.\n`;
   md += `- **Time** is wall clock with the proxy adding a ${RTT_MS} ms RTT and one RTT for each new TCP connection. It models latency, not bandwidth or server load. Median of ${REPS} runs. Connections are cold, as when an app resumes.\n`;
   md += `- All delta protocols use the same JSON Patch generator and the same "snapshot if smaller" rule, so differences come from protocol framing, request count, and coalescing, not from the diff algorithm.\n\n`;
   md += `## Protocols\n\n`;
   md += `- **GET (full)**: N plain GETs, HTTP/1.1, pool of ${H1_POOL} keep-alive connections.\n`;
   md += `- **GET + ETag**: as above with \`If-None-Match\`; unchanged resources return 304.\n`;
-  md += `- **Braid-style H1 / H2**: per-resource \`GET\` with \`Parents\`, server returns a JSON Patch (or 304). Modelled on draft-toomim-httpbis-braid-http-04 Section 2.4/3.2, not the Braid reference implementation. H2 is cleartext HTTP/2 with all N requests multiplexed on one connection.\n`;
-  md += `- **Mercure-style**: one SSE request with N topic matchers and \`Last-Event-ID\`, hub replays every event after the cursor as it occurred (one JSON Patch event per resource per round). Modelled on draft-dunglas-mercure-08, not the Mercure hub. The stream is closed after replay (a real subscriber would keep it open) and responses are not compressed.\n`;
+  md += `- **Braid model H1 / H2**: my minimal model of draft-toomim-httpbis-braid-http-04 (per-resource \`GET\` with \`Parents\`, JSON Patch or 304). H2 is cleartext HTTP/2 with all N requests on one connection.\n`;
+  md += `- **Braid real**: the \`braid-http\` library v${braidVersion} (\`braidify\` on the server, its \`fetch\` on the client), one \`GET\` with \`Parents\` per resource. Its Node client uses undici over HTTP/1.1 here (cleartext rules out HTTP/2 negotiation), so requests run on parallel connections.\n`;
+  md += `- **Braid real mux**: the same library with subscriptions and its Multiplexing v1.0 extension forced on: one \`POST\` creates a multiplexer, then one \`GET\` per resource, with all responses carried on the multiplexer stream. The client stops once each resource is caught up (\`Current-Version\` or the first update).\n`;
+  md += `- **Braid real, patch format**: Braid range patches (\`unit: json\`, one per changed item), with the same "snapshot if smaller" rule. braid-http does not compress responses.\n`;
+  md += `- **Mercure model**: my minimal model of draft-dunglas-mercure-08 (one SSE request, \`Last-Event-ID\`, replay of every intermediate event), not compressed.\n`;
+  md += `- **Mercure real**: the Mercure.rocks hub (Docker image \`dunglas/mercure\`, v1.1.0, default bolt history). The history is published to the hub before measurement; the client subscribes with N \`match\` parameters and \`Last-Event-ID\`, and disconnects after receiving the expected number of events (a real subscriber would stay connected). In the realistic profile the client sends a real RFC 9068 subscriber token. The hub's default configuration does not compress responses.\n`;
   md += `- **SYNC**: the reference server and client in this repository: one request, N baselines.\n\n`;
   md += `## Caveats\n\n`;
-  md += `- The Braid-style and Mercure-style servers are minimal re-implementations written for this benchmark, not the projects' own software.\n`;
+  md += `- "Model" columns are minimal re-implementations written for this benchmark; "real" columns run the projects' own software. Real Braid patch semantics on the client (applying \`json\` range patches) are application code written for this benchmark, as the library leaves them to the application.\n`;
+  md += `- Braid's Node client cannot use HTTP/2 over cleartext, so "Braid real" is measured over HTTP/1.1 only; "Braid model H2" is the HTTP/2 estimate.\n`;
   md += `- Every run is a single cold exchange on fresh connections, so connection reuse (which the SYNC server now supports) is not exercised.\n`;
   md += `- Only the catch-up exchange is measured. Braid and Mercure also provide live push, which SYNC does not.\n`;
+  md += `- In the realistic profile the "real" Braid and Mercure columns run with their default configuration, which does not compress responses, while the model columns and SYNC use gzip. Part of the realistic-profile gap to the real software is therefore compression defaults, not protocol design; the model columns are the compression-fair comparison.\n`;
+  md += `- Braid's range patches replace whole items, while JSON Patch (used by SYNC and the models) emits one operation per changed field. With many accumulated changes this makes "Braid real" smaller in the lab profile. That is a patch-format difference, and SYNC could negotiate an equivalent format.\n`;
   md += `- Mercure's replay is history, not state: the client receives every intermediate patch. That is a feature when history matters and a cost when it does not.\n\n`;
 
   for (const [profileKey, profile] of Object.entries(PROFILES)) {
@@ -465,19 +643,19 @@ function report(results) {
     for (const r of rows) {
       md += `| ${r.N} | ${r.L} | ${labels.map(l => Math.round(r.protocols[l].ms)).join(' | ')} |\n`;
     }
-    md += `\n### Requests made\n\n| N | ${labels.join(' | ')} |\n|${'---|'.repeat(labels.length + 1)}\n`;
+    md += `\n### Requests / TCP connections opened\n\nConnections matter because the byte counts above exclude TCP and TLS handshakes; under TLS each new connection adds a handshake of several kilobytes.\n\n| N | ${labels.join(' | ')} |\n|${'---|'.repeat(labels.length + 1)}\n`;
     for (const r of rows.filter(x => x.L === LS[0])) {
-      md += `| ${r.N} | ${labels.map(l => r.protocols[l].requests).join(' | ')} |\n`;
+      md += `| ${r.N} | ${labels.map(l => `${r.protocols[l].requests} / ${r.protocols[l].connections}`).join(' | ')} |\n`;
     }
     md += '\n';
   }
   return md;
 }
 
-main().then(results => {
+main().then(out => {
   const dir = __dirname;
-  fs.writeFileSync(path.join(dir, 'comparative-results.json'), JSON.stringify(results, null, 2));
-  const md = report(results);
+  fs.writeFileSync(path.join(dir, 'comparative-results.json'), JSON.stringify(out.results, null, 2));
+  const md = report(out);
   fs.writeFileSync(path.join(dir, 'comparative-results.md'), md);
   console.log(md);
   process.exit(0);

@@ -13,6 +13,7 @@
 \usepackage{xcolor}
 \usepackage{amsmath}
 \usepackage{parskip}
+\emergencystretch=1.5em
 
 \lstdefinestyle{code}{
   basicstyle=\ttfamily\small,
@@ -36,7 +37,7 @@
 \maketitle
 
 \begin{abstract}
-Applications that hold local copies of several server resources must periodically bring all of them up to date. HTTP gives no standard way to say, for many resources at once, ``this is what I already have; send only what changed.'' Related efforts address parts of this space: Braid-HTTP lets a \texttt{GET} carry a baseline for a single resource, Mercure and Events Query push updates over long-lived connections, and JMAP defines a complete application protocol. We describe SYNC, a safe and idempotent HTTP method that occupies one narrow combination of these designs: a client declares a baseline for each of many resources in one request, and the server returns an independent per-resource result (a JSON Patch, a JSON Merge Patch, or a full snapshot) in one response, with no long-lived connection and no failure coupling between resources. We present a reference implementation, a security analysis, and a measurement comparing SYNC with full-resource polling, conditional GET, and models of Braid-style and Mercure-style catch-up over real sockets with simulated latency. In a setting with realistic request headers and response compression, SYNC transferred 1.3\% of the bytes of full polling to catch up 100 resources after one round of change, versus 6.8\% for per-resource HTTP/2 requests with a baseline header and 3.7\% for a Mercure-style replay. With minimal headers and no compression the three are within a few percent of each other, and for a single resource the differences are small and go either way. We discuss where batching helps, where it does not, and how SYNC composes with subscription-based approaches.
+Applications that hold local copies of several server resources must periodically bring all of them up to date. HTTP gives no standard way to say, for many resources at once, ``this is what I already have; send only what changed.'' Related efforts address parts of this space: Braid-HTTP lets a \texttt{GET} carry a baseline for a single resource, Mercure and Events Query push updates over long-lived connections, and JMAP defines a complete application protocol. We describe SYNC, a safe and idempotent HTTP method that occupies one narrow combination of these designs: a client declares a baseline for each of many resources in one request, and the server returns an independent per-resource result (a JSON Patch, a JSON Merge Patch, or a full snapshot) in one response, with no long-lived connection and no failure coupling between resources. We present a reference implementation, a security analysis, and a measurement against the real \texttt{braid-http} library and the Mercure hub over real sockets with simulated latency. To catch up 100 resources after one round of change with minimal headers, SYNC matched the Mercure hub (1.1\% of the bytes of full polling each) and used fewer bytes than per-resource Braid requests (2.8\%); with many accumulated changes Braid's item-level patches were smaller. With realistic request headers and compression, SYNC used 1.3\% against 4.7\% for Mercure and 20.4\% for Braid, although part of that gap reflects the other systems not compressing by default. For a single resource SYNC offers no consistent advantage. We discuss where batching helps, where it does not, and how SYNC composes with subscription-based approaches.
 \end{abstract}
 
 \section{Introduction}
@@ -53,7 +54,7 @@ SYNC targets a narrower point in this space. It is a \emph{stateless pull} that 
 \begin{itemize}
   \item The definition of SYNC: a safe, idempotent method carrying a baseline per resource, returning per-resource results in a negotiated update format, with defined failure isolation (Section~\ref{sec:method}).
   \item A reference implementation, with a client that refuses patches that do not match its held baseline, and a test suite (Section~\ref{sec:impl}).
-  \item A measurement comparing SYNC with GET, conditional GET, and models of Braid-style and Mercure-style catch-up on real sockets, under minimal and realistic header and compression conditions, including conditions where SYNC does \emph{not} help (Section~\ref{sec:eval}).
+  \item A measurement comparing SYNC with GET, conditional GET, the \texttt{braid-http} library, and the Mercure hub on real sockets, under minimal and realistic header and compression conditions, including conditions where SYNC does \emph{not} help (Section~\ref{sec:eval}).
   \item A security analysis of client-declared-baseline protocols that states which mitigations the reference implementation does and does not enforce (Section~\ref{sec:security}).
 \end{itemize}
 
@@ -143,9 +144,11 @@ Node.js's HTTP parser (llhttp) rejects methods outside a fixed list with \texttt
 
 The server comprises: a per-resource resolver implementing the semantics of Section~\ref{sec:method}; a delta engine producing JSON Patch (via \texttt{fast-json-patch}), Merge Patch, or a snapshot; a pluggable, possibly asynchronous store interface (the resolver needs only ``current state'' and ``state at token''; a store that cannot reconstruct an old token simply causes a snapshot to be sent); and the transport layer enforcing size limits, keep-alive across consecutive SYNC requests, and optional gzip. The client library provides the request function, a map of held tokens, and a function that applies results and refuses patches that do not match the held baseline.
 
+\paragraph{Developer interface.} A high-level client, built on \texttt{fetch} so that the same code runs in browsers and in Node.js, takes a list of resource names and returns their current values. It tracks tokens, applies patches, discards results that do not match its baseline and asks again from scratch, and can serialize its state so that a reloaded application resumes with patches instead of full downloads. On the server, \texttt{createSyncServer(\{app, store\})} places SYNC (both forms) in front of an existing request handler, and the store needs only two functions.
+
 \paragraph{Deployability.} Because many servers, proxies, CDNs, and WAFs reject unknown methods (Node.js does so in its parser), the reference implementation also serves a \emph{POST compatibility form}: a \texttt{POST} with the SYNC media type is processed identically, as an Express middleware that works on any existing application. The client tries the SYNC method first, falls back to the POST form on \texttt{400}, \texttt{405}, \texttt{501}, or a connection reset, and remembers the choice per origin. The cost is that generic intermediaries do not know the POST is safe and idempotent. In the Node reference server a connection that mixes SYNC with other methods is not supported, because the first non-SYNC request hands the rest of the connection to Express; the POST form avoids this.
 
-A suite of 65 automated tests covers per-resource failure isolation, format negotiation and fallback, the header form (including parsing of resource names containing quotes and commas), limits, compression, resource names such as \texttt{\_\_proto\_\_}, keep-alive and pipelined requests, the POST form, client fallback against a server that rejects SYNC, an asynchronous recent-only store, a failing store, and end-to-end application of results against server state. Writing the suite exposed two defects in earlier versions of the server, both now fixed and covered by regression tests: a request body of \texttt{null} crashed the process, and large request bodies passed through to the Express side could be silently dropped.
+A suite of 77 automated tests covers per-resource failure isolation, format negotiation and fallback, the header form (including parsing of resource names containing quotes and commas), limits, compression, resource names such as \texttt{\_\_proto\_\_}, keep-alive and pipelined requests, the POST form, client fallback against a server that rejects SYNC, an asynchronous recent-only store, a failing store, the high-level client (persistence and resumption, deletion, evicted history), clients that half-close their connection, and end-to-end application of results against server state. Writing the suite exposed three defects in earlier versions of the server, all now fixed and covered by regression tests: a request body of \texttt{null} crashed the process, request bodies passed through to the application could be silently dropped while the internal connection was being established, and a client that half-closed its connection after sending a request never received the response.
 
 \section{Evaluation}
 \label{sec:eval}
@@ -154,47 +157,60 @@ A suite of 65 automated tests covers per-resource failure isolation, format nego
 
 A client holds $N$ resources at round~0, each a JSON object of 100 items (about 20\,KB uncompressed). The server then advances $L$ rounds. In each round about 20\% of resources change (at least one), and each changed resource has 3 of its 100 items modified. The client must bring all $N$ resources current. We vary $N\in\{1,10,50,100\}$ and $L\in\{1,5,25\}$.
 
-All protocols run over real loopback sockets behind a TCP proxy that counts bytes in both directions and adds a 40\,ms round-trip time (plus one RTT per new connection). Bytes therefore include all HTTP headers and HTTP/2 framing; TLS is not modelled. Each client's reconstructed state is compared with the server's, and any mismatch aborts the run. Connections are cold, as when an application resumes. Wall time is the median of three runs. Two header and compression profiles are used: \emph{lab} (minimal request headers, no compression) and \emph{realistic} (a bearer token, a cookie, browser-style headers, and gzip on bodies above 1\,KB). Item text is drawn from a seeded vocabulary so that compressibility is not unrealistically high.
+Every protocol runs over real sockets behind a TCP proxy that counts bytes in both directions, counts connections, and adds a 40\,ms round-trip time plus one RTT per new connection. Bytes include all HTTP headers and HTTP/2 framing but not TCP or TLS handshakes; the connection counts indicate where handshakes would add cost. Each client's reconstructed state is compared with the server's, and any mismatch aborts the run. Connections are cold, as when an application resumes. Wall time is the median of three runs. Two profiles are used: \emph{lab} (minimal request headers, no compression) and \emph{realistic} (a bearer token, a cookie, browser-style headers, and gzip on bodies above 1\,KB where the server supports it). Item text is drawn from a seeded vocabulary so that compressibility is not unrealistically high.
 
-The protocols compared are: full \texttt{GET}s ($N$ requests, HTTP/1.1, six keep-alive connections); \texttt{GET} with \texttt{If-None-Match}; a \emph{Braid-style} per-resource \texttt{GET} with a \texttt{Parents} header returning a JSON Patch or \texttt{304}, over both HTTP/1.1 and cleartext HTTP/2 with all requests multiplexed; a \emph{Mercure-style} single request with $N$ topic matchers and \texttt{Last-Event-ID}, in which the hub replays every intermediate event; and SYNC itself. All delta protocols use the same JSON Patch generator and the same ``snapshot if smaller'' rule, so differences arise from protocol framing, request count, and coalescing rather than the diff algorithm.
+\paragraph{Systems compared.} Two baselines: full \texttt{GET}s ($N$ requests over HTTP/1.1 with six keep-alive connections) and \texttt{GET} with \texttt{If-None-Match}. Two pieces of \emph{real} third-party software:
+\begin{itemize}
+  \item \textbf{Braid (real)}: the \texttt{braid-http} library (v1.5.1), with \texttt{braidify} on the server and its \texttt{fetch} on the client, one \texttt{GET} with \texttt{Parents} per resource. Updates are Braid range patches replacing each changed item. Its Node client runs over HTTP/1.1 here, because cleartext rules out HTTP/2 negotiation. We also run it with subscriptions and its Multiplexing~v1.0 extension forced on (\textbf{Braid real mux}): one \texttt{POST} creates a multiplexer and each resource is still requested with its own \texttt{GET}, with responses carried on the multiplexer stream.
+  \item \textbf{Mercure (real)}: the Mercure.rocks hub~1.1.0 (Docker image \texttt{dunglas/mercure}) with its default history store. The history is published before measurement; the client subscribes with $N$ topic matchers and \texttt{Last-Event-ID} and disconnects once it has received the expected events.
+\end{itemize}
+In addition, \emph{models} written for this study cover cases the real software could not exercise here: a Braid-style exchange over cleartext HTTP/2 with all requests multiplexed on one connection, and Braid-style and Mercure-style servers with gzip enabled. Finally, \textbf{SYNC} uses the reference server and client. The SYNC server and the models use the same JSON Patch generator and the same ``snapshot if smaller'' rule.
 
 \subsection{Results}
 
-Table~\ref{tab:bytes} gives bytes as a percentage of full \texttt{GET} for selected configurations; the complete tables are in the repository (\texttt{benchmarks/comparative-results.md}).
+Table~\ref{tab:bytes} shows bytes as a percentage of full \texttt{GET} for selected configurations, with the number of TCP connections opened. Complete tables are in the repository (\nolinkurl{benchmarks/comparative-results.md}).
 
 \begin{table}[h]
 \centering
-\small
-\begin{tabular}{llrrrrr}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llrrrrrr}
 \toprule
-\textbf{Profile} & $(N, L)$ & \textbf{Braid H1} & \textbf{Braid H2} & \textbf{Mercure} & \textbf{SYNC} & \textbf{GET (KB)} \\
+ & & \multicolumn{3}{c}{\textbf{Real software}} & \textbf{Model} & & \\
+\cmidrule(lr){3-5}
+\textbf{Profile} & $(N, L)$ & \textbf{Braid} & \textbf{Braid mux} & \textbf{Mercure} & \textbf{Braid H2} & \textbf{SYNC} & \textbf{GET, KB} \\
 \midrule
-Lab       & (1, 1)    & 6.2  & 6.1  & 6.5   & 7.1  & 20.9 \\
-Lab       & (100, 1)  & 1.9  & 1.0  & 0.9   & 1.1  & 2094.5 \\
-Lab       & (100, 25) & 25.5 & 24.4 & 28.4  & 24.7 & 2096.5 \\
-Realistic & (1, 1)    & 34.8 & 31.3 & 35.7  & 26.3 & 5.3 \\
-Realistic & (10, 1)   & 18.5 & 8.8  & 7.9   & 3.8  & 53.3 \\
-Realistic & (100, 1)  & 16.9 & 6.8  & 3.7   & 1.3  & 532.9 \\
-Realistic & (100, 25) & 37.4 & 25.8 & 110.6 & 14.3 & 539.5 \\
+Lab       & (1, 1)    & 6.5  & 16.3  & 8.9   & 6.1  & 7.1  & 20.9 \\
+Lab       & (10, 1)   & 3.4  & 7.5   & 2.2   & 1.7  & 2.0  & 209.4 \\
+Lab       & (100, 1)  & 2.8  & 6.0   & 1.1   & 1.0  & 1.1  & 2094.5 \\
+Lab       & (100, 25) & 22.6 & 38.5  & 29.5  & 24.4 & 24.7 & 2096.5 \\
+Realistic & (1, 1)    & 34.8 & 73.1  & 50.5  & 31.3 & 26.3 & 5.3 \\
+Realistic & (10, 1)   & 22.8 & 38.8  & 10.2  & 8.8  & 3.8  & 53.3 \\
+Realistic & (100, 1)  & 20.4 & 33.0  & 4.7   & 6.8  & 1.3  & 532.9 \\
+Realistic & (100, 25) & 97.0 & 158.7 & 115.0 & 25.8 & 14.3 & 539.5 \\
+\midrule
+\multicolumn{2}{l}{Connections at $N=100$} & 100 & 101 & 1 & 1 & 1 & 6 \\
 \bottomrule
 \end{tabular}
-\caption{Total wire bytes (both directions) as a percentage of full \texttt{GET}, for $N$ resources after $L$ rounds. Lower is better. The last column is the absolute size of full \texttt{GET}.}
+\caption{Total wire bytes (both directions) as a percentage of full \texttt{GET}, for $N$ resources after $L$ rounds; lower is better. The last column is the absolute size of full \texttt{GET}. ``Braid H2 model'' is the only model column shown.}
 \label{tab:bytes}
 \end{table}
 
-\paragraph{Against full polling.} All delta mechanisms save most of the bytes when $L$ is small. Conditional \texttt{GET} helps only when many resources are unchanged: at $N=100$, $L=1$ it transferred 17--28\% of full \texttt{GET}, but at $L=25$, where every resource had changed, it saved nothing (100.2--100.6\%).
+\paragraph{Against full polling.} Every delta mechanism saves most of the bytes when $L$ is small. Conditional \texttt{GET} helps only when many resources are unchanged: at $N=100$, $L=1$ it transferred 17--28\% of full \texttt{GET}, and at $L=25$, with every resource changed, it saved nothing.
 
-\paragraph{Lab conditions: no clear winner.} With minimal headers and no compression, Braid-style HTTP/2, Mercure-style replay, and SYNC are within a few percent of one another. For a single resource ($N=1$), the Braid-style request is smaller than SYNC (6.1\% versus 7.1\% at $L=1$), because SYNC pays for a request body. SYNC offers no byte advantage here. In the realistic profile the single-resource result is mixed: SYNC is smaller at $L=1$ (26.3\% versus 31.3\%) and larger at $L=5$ (39.9\% versus 33.0\%).
+\paragraph{Lab profile.} With minimal headers and no compression, SYNC and the real Mercure hub are tied at $N=100$, $L=1$ (1.1\% each; 23.8\,KB versus 23.6\,KB), and the HTTP/2 Braid model is equal at 1.0\%. Real Braid used 2.8\%, because each of the 100 requests carries its own headers and its own connection. For a single resource SYNC is not smaller than the alternatives (7.1\% against 6.5\% for real Braid). When many changes accumulate ($L=25$), real Braid is the smallest (22.6\% against 24.7\% for SYNC at $N=100$). This is a patch-format effect: Braid's range patches replace whole items, while JSON Patch emits one operation per changed field. SYNC's format negotiation could carry an equivalent format.
 
-\paragraph{Realistic conditions: batching helps.} With request headers and compression, per-request overhead matters. At $N=100$, $L=1$, SYNC transferred 6.7\,KB, against 36.0\,KB for Braid-style HTTP/2, 90.2\,KB for Braid-style HTTP/1.1, and 19.8\,KB for the Mercure-style replay (which, as modelled, is not compressed). Two effects contribute: one request carries one set of headers instead of $N$, and one large body compresses better than $N$ small ones. We have not separated the two effects experimentally.
+\paragraph{Realistic profile.} With request headers and compression, SYNC is the smallest in every configuration with more than one resource: at $N=100$, $L=1$ it transferred 6.7\,KB, against 25.1\,KB for the real Mercure hub, 36.0\,KB for the HTTP/2 Braid model, and 108.6\,KB for real Braid. Part of the gap to the real software is that neither compresses responses in its default configuration. The Braid model, which does compress, isolates the protocol effect: one request carries one set of headers instead of $N$, and one large body compresses better than $N$ small ones. We have not separated these two effects.
 
-\paragraph{Large $L$.} As $L$ grows the delta approaches the full state. At $N=1$, $L=25$ the Braid-style and SYNC requests send 74--93\% of the bytes of a full \texttt{GET}. The Mercure-style replay can exceed full polling (130\% in the lab profile and 504\% in the realistic profile at $N=1$, $L=25$) because it delivers every intermediate patch rather than the net change; this is appropriate when history is wanted and wasteful when it is not.
+\paragraph{History replay.} Mercure replays every intermediate event rather than the net change. At $N=1$, $L=25$ this cost 137\% (lab) and 534\% (realistic) of a full \texttt{GET}. That is the right behavior when history is wanted and a cost when only current state is.
 
-\paragraph{Time.} With a simulated 40\,ms RTT, request count dominates over HTTP/1.1: at $N=100$, per-resource HTTP/1.1 requests took about 750--850\,ms, whereas SYNC, the Mercure-style stream, and HTTP/2 multiplexing took roughly 95--115\,ms at $L=1$. At $N=100$, $L=25$ in the lab profile the HTTP/2 run took 639\,ms against 117\,ms for SYNC; we suspect HTTP/2 flow-control windows across round trips but did not investigate.
+\paragraph{Multiplexing.} In this Node setup, Braid's multiplexed mode used roughly twice the bytes of its plain mode and still opened a connection per request. Its purpose is to keep many long-lived subscriptions within a browser's per-host connection limit, which this measurement does not exercise, so it should not be read as a verdict on multiplexing.
+
+\paragraph{Time and connections.} With a 40\,ms RTT, request count dominates over HTTP/1.1 with a connection pool: at $N=100$, pooled per-resource \texttt{GET}s took about 760--860\,ms, while SYNC, the Mercure hub, and real Braid took about 95--115\,ms at $L=1$. Real Braid achieves its time by opening one connection per resource (100 at $N=100$). Under TLS, each of those adds a handshake of several kilobytes that our byte counts exclude, whereas SYNC and Mercure use one connection.
 
 \subsection{Limitations}
 
-The Braid-style and Mercure-style servers are minimal models written for this study from the published drafts, not the projects' own software, and Mercure's stream is closed after replay where a real subscriber would hold it open. The measurement is a single exchange over loopback with emulated latency; it does not model TLS, server load, packet loss, or bandwidth limits. Data is synthetic. Only catch-up is measured: Braid and Mercure also provide live push, which SYNC does not. A fuller evaluation would use the projects' reference implementations and real application traces.
+The real software was used in default configurations and driven by code written for this study; in particular, applying Braid's \texttt{json} range patches is application code, as the library leaves it to applications. The HTTP/2 and compressed Braid figures come from models, not from the Braid software. Mercure's subscriber disconnects after catching up, where a real subscriber would stay connected. The measurement is a single exchange over loopback with emulated latency; it does not model TLS, server load, packet loss, or bandwidth limits, and the data is synthetic. Only catch-up is measured: Braid and Mercure also provide live push, which SYNC does not.
 
 \section{Security}
 \label{sec:security}
@@ -225,9 +241,9 @@ Whether a recommended token encoding should align with Braid version identifiers
 
 \section{Conclusion}
 
-HTTP lacks a standard way to catch up many resources in one stateless exchange. Existing efforts cover parts of this space: Braid for per-resource baselines and live streams, Mercure and Events Query for push, JMAP for a complete application protocol. SYNC is a small method that combines client-declared baselines, many resources per request, per-resource results, and negotiated formats. Our measurements show that its advantage is real but conditional: it is largest when many resources are caught up under realistic header and compression overheads, comparable to alternatives when overheads are minimal, and small and inconsistent in sign for a single resource. We release the reference implementation, tests, benchmark, specification, and security analysis at \url{https://github.com/Meet-1010/sync-http-method}, and welcome comparison against the Braid, Mercure, and Events Query reference implementations.
+HTTP lacks a standard way to catch up many resources in one stateless exchange. Existing efforts cover parts of this space: Braid for per-resource baselines and live streams, Mercure and Events Query for push, JMAP for a complete application protocol. SYNC is a small method that combines client-declared baselines, many resources per request, per-resource results, and negotiated formats. Measured against the real Braid library and Mercure hub, its advantage is real but conditional: it is largest when many resources are caught up under realistic header and compression overheads, a tie with Mercure when overheads are minimal, behind Braid's item-level patches when many changes accumulate, and absent for a single resource. We release the reference implementation, tests, benchmark, specification, and security analysis at \url{https://github.com/Meet-1010/sync-http-method}, and welcome further comparison, in particular in browsers, over TLS, and against Events Query.
 
-\begin{thebibliography}{99}
+\begin{thebibliography}{99}\raggedright
 
 \bibitem{rfc9110}
 Fielding, R., Nottingham, M., and Reschke, J. ``HTTP Semantics.'' \textit{RFC 9110}, IETF, June 2022.
@@ -260,16 +276,16 @@ Mogul, J., Krishnamurthy, B., Douglis, F., Feldmann, A., Goland, Y., van Hoff, A
 Fette, I. and Melnikov, A. ``The WebSocket Protocol.'' \textit{RFC 6455}, IETF, December 2011.
 
 \bibitem{braid}
-Toomim, M., Little, G., Walker, R., Bellomy, B., and Gentle, J. ``Braid-HTTP: Synchronization for HTTP.'' Internet-Draft \texttt{draft-toomim-httpbis-braid-http-04}, expired.
+Toomim, M., Little, G., Walker, R., Bellomy, B., and Gentle, J. ``Braid-HTTP: Synchronization for HTTP.'' Internet-Draft \nolinkurl{draft-toomim-httpbis-braid-http-04}, expired.
 
 \bibitem{braidversions}
-Toomim, M. ``HTTP Resource Versioning.'' Internet-Draft \texttt{draft-toomim-httpbis-versions-04}, expired.
+Toomim, M. ``HTTP Resource Versioning.'' Internet-Draft \nolinkurl{draft-toomim-httpbis-versions-04}, expired.
 
 \bibitem{mercure}
-Dunglas, K. ``The Mercure Protocol.'' Internet-Draft \texttt{draft-dunglas-mercure-08}.
+Dunglas, K. ``The Mercure Protocol.'' Internet-Draft \nolinkurl{draft-dunglas-mercure-08}.
 
 \bibitem{eventsquery}
-Gupta, R. ``HTTP Events Query.'' Internet-Draft \texttt{draft-gupta-httpapi-events-query-03}.
+Gupta, R. ``HTTP Events Query.'' Internet-Draft \nolinkurl{draft-gupta-httpapi-events-query-03}.
 
 \end{thebibliography}
 

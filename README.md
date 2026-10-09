@@ -24,40 +24,66 @@ SYNC is **not the first** proposal in this space. Related work, all of which the
 
 SYNC is meant to **compose** with these: SYNC once on reconnect for all N resources, then open subscriptions for live updates.
 
-**Honest limits.** SYNC's saving over naive GET polling is large, but a single-resource Braid `GET`+`Parents` achieves a similar saving, and with minimal headers and no compression SYNC, Braid over HTTP/2, and a Mercure-style replay land within a few percent of each other. SYNC's advantage appears with many resources under realistic header and compression overhead (for example 6.7 KB vs 36 KB for Braid-style HTTP/2 to catch up 100 resources after one round of change), and over HTTP/1.1, where request count dominates latency. See [`benchmarks/comparative-results.md`](benchmarks/comparative-results.md) for measurements against Braid-style and Mercure-style baselines (`npm run bench` reproduces them).
+**Honest limits, measured against the real software** ([full results](benchmarks/comparative-results.md), reproduce with `npm run bench`). Catching up 100 resources after one round of change:
+
+| | SYNC | Mercure hub (real) | braid-http (real) |
+|---|---|---|---|
+| Minimal headers, no compression | 23.8 KB, 1 connection | 23.6 KB, 1 connection | 59.1 KB, 100 connections |
+| Realistic headers + gzip | 6.7 KB | 25.1 KB | 108.6 KB |
+
+With minimal headers SYNC ties Mercure. With realistic headers it is far smaller, but part of that is that Braid and Mercure do not compress by default. When many changes accumulate, Braid's item-level patches beat SYNC's JSON Patch. For a single resource there is no consistent winner. SYNC does not do live push; Braid and Mercure do.
 
 ## Quick Start
 
 ```bash
 npm install
-npm test        # all tests
+npm test        # 77 tests
 npm run demo    # end-to-end demo
-npm start       # server on port 3000
+npm start       # demo server on port 3000
+npm run bench   # comparative benchmark (see benchmarks/README.md)
 ```
 
 ## Use it in your own app
 
-Works on an ordinary Express app, behind any proxy or CDN, with no custom-method support. This is the "POST form" of the protocol (spec Section 4.5):
+Not yet on npm; install from this repository (`npm install github:Meet-1010/sync-http-method`).
+
+**Client** (browsers and Node 18+, built on `fetch`):
 
 ```js
-const { syncOverPost } = require('./server/src/express-middleware');
+const { createSyncClient } = require('sync-http-method');
 
-app.use(syncOverPost({ store: {
-  // return { id, data } or null; either may be async (database, cache, ...)
-  async getCurrent(resource) { /* ... */ },
-  async getVersion(resource, token) { /* null = cannot rebuild it, send a snapshot */ },
-}}));
+const client = createSyncClient('https://api.example.com/sync');
+const { values, changed } = await client.sync(['/users', '/posts', '/config']);
+// values: current data for each resource. Later calls download only what changed.
+// localStorage.setItem('sync', JSON.stringify(client))  -> resume with patches after a reload
 ```
+
+The client tries the SYNC method first and falls back to the POST form when anything on the path rejects it, remembering the choice per origin. It tracks tokens, applies patches, and recovers from stale or missing history on its own.
+
+**Server** (any Node request handler, Express included):
 
 ```js
-const { syncRequest } = require('./client/src/sync-client');
-const res = await syncRequest('https://api.example.com/sync', { '/users': 'v42', '/posts': null });
-// Tries the SYNC method first, falls back to POST automatically, and remembers per origin.
+const { createSyncServer, createMemoryStore } = require('sync-http-method/server');
+
+createSyncServer({
+  app,                       // your existing handler; every non-SYNC request goes to it
+  store: {                   // or createMemoryStore() to try it out
+    async getCurrent(resource) { /* return { id, data } or null */ },
+    async getVersion(resource, token) { /* null = cannot rebuild it; the client gets a snapshot */ },
+  },
+}).listen(3000);
 ```
 
-The store only needs the versions you can afford to keep. A token you cannot reconstruct is answered with a snapshot, not an error.
+Only the POST form (for example inside an existing Express app, with no raw-TCP front):
 
-**Known limits of the Node reference server.** SYNC connections can be kept alive, but the first non-SYNC request on a connection hands the rest of that connection to Express, so a connection that mixes SYNC with other methods is not supported. Use the POST form for such clients, or a runtime/proxy that accepts arbitrary methods. This package is not published to npm yet.
+```js
+const { syncOverPost } = require('sync-http-method/server');
+app.use(syncOverPost({ store }));
+```
+
+TypeScript definitions are included.
+
+**Known limits of the Node server.** SYNC connections can be kept alive, but the first non-SYNC request on a connection hands the rest of that connection to your app, so a single connection that mixes SYNC with other methods is not supported. The client's POST fallback covers this.
 
 ## Request
 
@@ -106,16 +132,20 @@ Per-resource `status`: `200` update present, `304` unchanged, `404` no such reso
 
 ```
 server/src/
-  index.js          # net.createServer: bypasses llhttp's method whitelist, keep-alive, size limits
-  sync-handler.js   # request validation, header/body forms, response writing
-  express-middleware.js  # POST form for any Express app
+  package.js        # public server API (sync-http-method/server)
+  create-server.js  # raw TCP front: SYNC method, keep-alive, limits; other methods go to your app
+  post-form.js      # POST form, as middleware or around any Node handler
+  sync-handler.js   # request validation, header/body forms, response encoding
   sync-core.js      # per-resource resolution (the protocol logic)
   delta-engine.js   # JSON Patch, JSON Merge Patch, snapshot selection
   version-store.js  # in-memory versioned store
+  index.js          # demo server
 client/src/
-  sync-client.js    # SYNC requests via Node's http module
-  baseline-map.js   # tracks the tokens the client holds
+  index.js          # public client API (sync-http-method)
+  fetch-client.js   # createSyncClient and syncFetch, for browsers and Node
   apply.js          # applies results; refuses patches that do not match the held baseline
+  baseline-map.js   # token bookkeeping for low-level use
+  sync-client.js    # Node http-module client used by tests and the benchmark
 server/tests/       # Jest suite
 benchmarks/         # bandwidth and comparative benchmarks
 spec/               # Internet-Draft and security analysis
