@@ -154,6 +154,13 @@ describe('The server sends the smallest update the client accepts', () => {
     expect(buildUpdate(a, b, [MERGE_PATCH, JSON_PATCH]).format).toBe(JSON_PATCH);
   });
 
+  test('With patchOnly, a patch is returned even when the whole value is smaller', () => {
+    const base = { type: 'text/plain', data: 'ab\n' };
+    const next = { type: 'text/plain', data: 'ac\n' };
+    expect(buildUpdate(base, next).full).toBe(true);
+    expect(buildUpdate(base, next, undefined, { patchOnly: true })).toEqual({ format: SPLICE, data: { unit: 'codepoint', splices: [[1, 1, 'c']] } });
+  });
+
   test("The client's order breaks ties, and only accepted formats are used", () => {
     const a = json({ k: 1, pad: 'p'.repeat(200) });
     const b = json({ k: 2, pad: 'p'.repeat(200) });
@@ -1490,10 +1497,43 @@ describe('Atomic writes (application/sync-changes+json)', () => {
     expect([...store.getCurrent('/bin').data]).toEqual([9, 2, 3, 4, 5, 6, 70, 80, 90]);
   });
 
-  test('A full representation or a deletion from an older version is never merged', async () => {
+  test('A full representation from an older version is merged as the change from its base', async () => {
     store.addVersion('/b', 'b2', { title: 'B2', count: 1 });
-    const res = await post({ changes: { '/b': { base: 'b1', type: 'application/json', data: { replaced: true } } }, merge: true });
-    expect((await res.json()).results['/b']).toMatchObject({ status: 409, current: 'b2' });
+    const ok = await post({ changes: { '/b': { base: 'b1', type: 'application/json', data: { title: 'B', count: 7 } } }, merge: true });
+    expect(ok.status).toBe(200);
+    expect((await ok.json()).results['/b']).toMatchObject({ status: 200, rebased: true });
+    expect(store.getCurrent('/b').data).toEqual({ title: 'B2', count: 7 });
+    store.addVersion('/t', 't2', text.replace('line one', 'LINE ONE'), 'text/plain');
+    const textOk = await post({ changes: { '/t': { base: 't1', type: 'text/plain', data: text.replace('three', '3') } }, merge: true });
+    expect(textOk.status).toBe(200);
+    expect(store.getCurrent('/t').data).toBe('LINE ONE\nline two\nline 3\n');
+    const clash = await post({ changes: { '/b': { base: 'b1', type: 'application/json', data: { title: 'Mine', count: 1 } } }, merge: true });
+    expect((await clash.json()).results['/b']).toMatchObject({ status: 409, reason: expect.stringContaining('/title') });
+  });
+
+  test('A deletion from an older version, or a change of media type, is never merged', async () => {
+    store.addVersion('/b', 'b2', { title: 'B2', count: 1 });
+    const del = await post({ changes: { '/b': { base: 'b1', delete: true } }, merge: true });
+    expect((await del.json()).results['/b']).toMatchObject({ status: 409, current: 'b2' });
+    store.addVersion('/t', 't2', 'other\n', 'text/plain');
+    const retype = await post({ changes: { '/t': { base: 't1', type: 'text/markdown', data: '# md\n' } }, merge: true });
+    expect((await retype.json()).results['/t']).toMatchObject({ status: 409, reason: expect.stringContaining('media type') });
+  });
+
+  test('client.write merges edits to a tiny document, where the whole value is smaller than a patch', async () => {
+    const tiny = 'line one\nline two\nline three\n';
+    store.addVersion('/tiny', 'y1', tiny, 'text/plain');
+    const sent = [];
+    const spy = (u, init = {}) => { if (init.method === 'POST') sent.push(JSON.parse(init.body)); return fetch(u, init); };
+    const client = createSyncClient(srv.url, { fetch: spy });
+    await client.sync(['/tiny']);
+    store.addVersion('/tiny', 'y2', tiny.replace('line one', 'LINE ONE'), 'text/plain');
+    const out = await client.write({ '/tiny': { value: tiny.replace('line three', 'line 3') } }, { merge: true });
+    expect(out.rebased).toEqual(['/tiny']);
+    // The client sends a patch (what merging needs), not the smaller whole value.
+    expect(sent[0].changes['/tiny']).toMatchObject({ base: 'y1', format: 'application/sync-splice+json' });
+    expect(store.getCurrent('/tiny').data).toBe('LINE ONE\nline two\nline 3\n');
+    expect(client.get('/tiny')).toBe(store.getCurrent('/tiny').data);
   });
 
   test('Requests are validated', async () => {

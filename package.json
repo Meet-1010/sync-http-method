@@ -1,6 +1,6 @@
 {
   "name": "sync-http-method",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Keep many HTTP resources in sync with QUERY: per-resource patches for any media type, consistent snapshots, live watches, atomic multi-resource writes, and catch-up that shared caches can serve.",
   "main": "client/src/index.js",
   "types": "client/src/index.d.ts",

@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const jsonpatch = require('fast-json-patch');
 const { isVersion, canonical, sameVersion } = require('./versions');
 const {
-  JSON_PATCH, MERGE_PATCH, SPLICE, PATCH_FORMATS, isJsonType, isTextType, buildUpdate,
+  JSON_PATCH, MERGE_PATCH, SPLICE, PATCH_FORMATS, essence, isJsonType, isTextType, buildUpdate,
 } = require('../../shared/formats');
 const { base64Encode, base64Decode } = require('../../shared/media');
 const { applyMergePatch, applySplice } = require('../../client/src/apply');
@@ -27,7 +27,8 @@ const { MAX_RESOURCES } = require('./sync-core');
 // Without "merge", a base that is not the current version fails the request (412
 // for that resource). With "merge": true, a change from an earlier version is
 // rebased onto the current one when the two touch different parts (rebase.js), and
-// conflicts otherwise (409). Results, per resource:
+// conflicts otherwise (409); a full representation from an older version is
+// merged as the change from its base to it. Results, per resource:
 //   200 { from, to }                     applied; `to` is the new version (absent after delete)
 //   200 { from, to, rebased: true, update }  applied after rebasing; `update` brings the
 //                                        client's copy (base + its change) to `to`
@@ -164,15 +165,27 @@ async function plan(request, { store, context, newVersion }) {
 
     // The resource moved on since the client's base.
     if (!merge) { fail(resource, { status: 412, current: now }); continue; }
-    if (!format) { fail(resource, { status: 409, current: now, reason: 'a full representation or a deletion cannot be merged with a newer version' }); continue; }
+    if (c.delete) { fail(resource, { status: 409, current: now, reason: 'a deletion cannot be merged with a newer version' }); continue; }
     const baseRep = await store.getVersion(resource, base, context);
     if (!baseRep) { fail(resource, { status: 409, current: now, reason: 'the base version is no longer kept' }); continue; }
     const b = { ...baseRep, type: baseRep.type || 'application/json' };
     let mine;
+    let patchFormat = format;
+    let patch = c.data;
     try {
-      mine = { type: b.type, data: applyPatch(format, b, c.data) };
+      if (format) {
+        mine = { type: b.type, data: applyPatch(format, b, c.data) };
+      } else {
+        // A full representation from an older version: the change is from its base to it.
+        mine = { type: c.type, data: representationOf(c) };
+        if (essence(mine.type) !== essence(b.type)) { fail(resource, { status: 409, current: now, reason: 'the media type changed since the base' }); continue; }
+        const derived = buildUpdate(b, mine, isJsonType(b.type) ? [JSON_PATCH, MERGE_PATCH] : [SPLICE], { patchOnly: true });
+        if (derived.full) { fail(resource, { status: 409, current: now, reason: 'the change cannot be expressed as a patch to merge' }); continue; }
+        patchFormat = derived.format;
+        patch = derived.data;
+      }
     } catch (e) { fail(resource, { status: 422, reason: e.message }); continue; }
-    const merged = rebase(format, b, cur, c.data);
+    const merged = rebase(patchFormat, b, cur, patch);
     if (merged.conflict) { fail(resource, { status: 409, current: now, reason: merged.conflict }); continue; }
     const version = newVersion(resource);
     entries.push({ resource, expect: now, version, type: cur.type, data: merged.data });

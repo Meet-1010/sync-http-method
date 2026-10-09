@@ -169,7 +169,7 @@ Result (`application/sync-result+json`, or `multipart/mixed`):
 
 ```bash
 npm install
-npm test                    # 219 tests
+npm test                    # 222 tests
 npm run demo                # end-to-end demo
 npm run bench               # one client: bytes, requests, time vs GET, Braid, Mercure
 npm run bench:consistency   # torn reads

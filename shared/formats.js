@@ -140,8 +140,9 @@ function patchFor(format, base, current) {
 // Returns { format, data } for the smallest patch in any accepted format (the
 // client's order breaks ties), or { full: true } when the full representation
 // should be sent: the media type changed, no accepted format can express the
-// change, or no patch is smaller than the representation.
-function buildUpdate(base, current, accept) {
+// change, or no patch is smaller than the representation. With patchOnly, a patch
+// is returned even when it is not smaller (a change to merge must be a patch).
+function buildUpdate(base, current, accept, { patchOnly = false } = {}) {
   if (essence(base.type) !== essence(current.type)) return { full: true };
   const prefs = [...new Set(Array.isArray(accept) && accept.length ? accept : DEFAULT_ACCEPT)];
   let best = null;
@@ -151,7 +152,7 @@ function buildUpdate(base, current, accept) {
     const size = patchSize(data);
     if (!best || size < best.size) best = { format, data, size };
   }
-  if (!best || best.size >= representationBytes(current).length) return { full: true };
+  if (!best || (!patchOnly && best.size >= representationBytes(current).length)) return { full: true };
   return { format: best.format, data: best.data };
 }
 

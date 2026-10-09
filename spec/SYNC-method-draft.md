@@ -371,7 +371,7 @@ With `"merge": true`, a change made from a base B to a resource whose current ve
 - JSON representations, changed with JSON Patch or JSON Merge Patch: the parts are JSON Pointer [RFC6901] paths. Two changes conflict when a path that one changes equals, contains, or lies within a path that the other changes. All changes within one array conflict with each other, because positions within it shift.
 - Representations changed with splices (Section 6): the parts are ranges of the base. Two changes conflict when the ranges they replace overlap, or when one inserts strictly within a range that the other replaces. Insertions at the same position are both kept, the one already applied first.
 
-A full representation or a deletion whose base is not the current version conflicts. A conflict is reported with status `409`, and nothing is applied.
+A server MAY merge a full representation whose base is not the current version as the change from its base to it, which the server computes; otherwise, and for a deletion whose base is not the current version, the change conflicts. A client that asks for merging SHOULD send patches. A conflict is reported with status `409`, and nothing is applied.
 
 When a change is applied after merging, its result has `"rebased": true` and an `update`: a patch (`format` and `data`) or a full representation (`type` and `data`, and `encoding` where needed) that brings the client's copy, its base with its own change applied, to the new version. The merged representation is determined by B, C, and the change, so every server produces the same result.
 

@@ -430,7 +430,8 @@ class SyncClient {
       mine[resource] = { type, value: c.value };
       const full = { type, ...(c.value instanceof Uint8Array ? { encoding: 'base64', data: base64Encode(c.value) } : { data: c.value }) };
       if (!held) { wire[resource] = { base: null, ...full }; continue; }
-      const u = buildUpdate({ type: held.type, data: held.value }, { type, data: c.value }, accept);
+      // A change the server may have to merge must be a patch, even if the whole value is smaller.
+      const u = buildUpdate({ type: held.type, data: held.value }, { type, data: c.value }, accept, { patchOnly: merge });
       wire[resource] = u.full ? { base: held.version, ...full } : { base: held.version, format: u.format, data: u.data };
     }
     const body = JSON.stringify({ changes: wire, ...(merge ? { merge: true } : {}), ...(accept ? { accept } : {}) });
