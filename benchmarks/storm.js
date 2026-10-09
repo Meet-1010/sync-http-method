@@ -56,8 +56,10 @@ const SCENARIOS = [
 // ── Infrastructure ───────────────────────────────────────────────────────────
 
 // A fresh origin per variant, so no variant benefits from updates another computed.
+// It is stopped when this process exits, also after an error.
 function startOrigin() {
   const child = fork(path.join(__dirname, 'storm', 'origin.js'), [], { env: { ...process.env, N: String(N), L: String(L), LINK_SECRET } });
+  process.on('exit', () => child.kill());
   const pending = [];
   child.on('message', m => { if (m.stats) pending.shift()(m.stats); });
   return new Promise(resolve => child.once('message', m => resolve({
