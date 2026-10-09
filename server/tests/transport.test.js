@@ -151,13 +151,13 @@ function recentOnlyStore() {
       calls.getCurrent++;
       await tick();
       const s = states[resource];
-      return s ? { id: 'v3', data: s.v3 } : null;
+      return s ? { version: 'v3', data: s.v3 } : null;
     },
     async getVersion(resource, token) {
       calls.getVersion++;
       await tick();
       // keeps only the two most recent versions
-      return token === 'v2' ? { id: 'v2', data: states[resource].v2 } : null;
+      return token === 'v2' ? { version: 'v2', data: states[resource].v2 } : null;
     },
   };
 }
@@ -190,7 +190,8 @@ describe('Plain Express app (no raw-TCP front)', () => {
     const res = await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v2' });
     expect(res.status).toBe(200);
     expect(res.transport).toBe('QUERY');
-    expect(res.body.results['/doc']).toMatchObject({ status: 200, from: 'v2', to: 'v3' });
+    // v2 -> v3 adds more than the whole document is worth as a patch, so it comes in full
+    expect(res.body.results['/doc']).toMatchObject({ status: 200, from: null, to: 'v3', type: 'application/json' });
   });
 
   test('Responses advertise the query format with Accept-Query (RFC 10008 Section 3)', async () => {
@@ -216,7 +217,7 @@ describe('Plain Express app (no raw-TCP front)', () => {
 
   test('Async recent-only store: a token it cannot reconstruct gets a snapshot', async () => {
     const res = await syncRequest(`http://127.0.0.1:${app.port}/x`, { '/doc': 'v1' }, { transport: 'post' });
-    expect(res.body.results['/doc']).toMatchObject({ status: 200, format: 'application/json', from: null, baseline: 'unrecognized' });
+    expect(res.body.results['/doc']).toMatchObject({ status: 200, type: 'application/json', from: null, baseline: 'unrecognized' });
   });
 
   test('Resources are resolved in parallel and unknown ones report 404', async () => {
@@ -288,7 +289,7 @@ describe('Per-resource authorization', () => {
       getCurrent(resource, ctx) {
         seen.push(ctx);
         if (resource === '/private' && ctx.headers.authorization !== 'Bearer ok') return null;
-        return { id: 'v1', data: { r: resource } };
+        return { version: 'v1', data: { r: resource } };
       },
       getVersion: () => null,
     };

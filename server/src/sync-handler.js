@@ -2,44 +2,35 @@
 
 const zlib = require('zlib');
 const { computeResults, MAX_RESOURCES } = require('./sync-core');
+const { isVersion } = require('./versions');
+const { negotiate, encodeJson, encodeMultipart, JSON_RESULT } = require('./encode');
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_HEADER_BYTES = 16 * 1024;
-
 const GZIP_MIN_BYTES = 1024;
 
-// Shared by the raw-socket writer and the Express middleware.
-function encodeResponse(body, acceptEncoding, extraHeaders = {}) {
-  let buf = body ? Buffer.from(JSON.stringify(body)) : Buffer.alloc(0);
-  const headers = {
-    'Content-Type': 'application/sync-result+json',
-    'Cache-Control': 'no-store',
-    ...extraHeaders,
-  };
-  if (buf.length >= GZIP_MIN_BYTES && /\bgzip\b/i.test(acceptEncoding || '')) {
-    buf = zlib.gzipSync(buf);
-    headers['Content-Encoding'] = 'gzip';
-    headers['Vary'] = 'Accept-Encoding';
-  }
-  headers['Content-Length'] = buf.length;
-  return { buf, headers };
-}
+const STATUS_TEXT = {
+  200: 'OK', 204: 'No Content', 304: 'Not Modified', 400: 'Bad Request', 404: 'Not Found', 406: 'Not Acceptable',
+  411: 'Length Required', 413: 'Content Too Large', 415: 'Unsupported Media Type', 422: 'Unprocessable Content',
+  431: 'Request Header Fields Too Large', 500: 'Internal Server Error',
+};
 
-function sendResponse(socket, status, statusText, extraHeaders, body, acceptEncoding, keepAlive = false) {
-  const { buf, headers } = encodeResponse(body, acceptEncoding, extraHeaders);
-  headers['Connection'] = keepAlive ? 'keep-alive' : 'close';
+// Resource names are absolute-path references (RFC 3986 Section 4.2) on the target's
+// origin, optionally with a query: "/" not followed by "/", then path and query
+// characters (unreserved, sub-delims, ":", "@", "/", "?", or percent-encoded octets).
+const isResourceName = k => /^\/(?!\/)(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9A-Fa-f]{2})*$/.test(k);
+const isPrintableVersion = v => (typeof v === 'string' ? [v] : v).every(id => /^[\x20-\x7E]+$/.test(id));
 
-  let head = `HTTP/1.1 ${status} ${statusText}\r\n`;
-  for (const [k, v] of Object.entries(headers)) head += `${k}: ${v}\r\n`;
-  head += '\r\n';
-
-  socket.write(head);
-  if (buf.length) socket.write(buf);
-  if (!keepAlive) socket.end();
-}
+// RFC 9457 problem details.
+const problem = (status, detail) => ({
+  status,
+  headers: { 'Content-Type': 'application/problem+json' },
+  body: Buffer.from(JSON.stringify({ title: STATUS_TEXT[status], status, detail })),
+});
 
 // Parses a Structured Fields (RFC 9651) List of Inner Lists of Strings:
 //   ("/users" "v42"), ("/posts")      (one item = no baseline yet)
+// Used only by the experimental SYNC method.
 function parseBaselineHeader(value) {
   const out = Object.create(null);
   let i = 0;
@@ -88,84 +79,109 @@ function parseBaselineHeader(value) {
   return Object.keys(out).length ? out : null;
 }
 
-const STATUS_TEXT = { 200: 'OK', 204: 'No Content', 400: 'Bad Request', 413: 'Content Too Large', 422: 'Unprocessable Content' };
-
-// Resource names are absolute-path references (RFC 3986 Section 4.2) on the target's origin:
-// no scheme, no authority, no fragment.
-const isPathAbsolute = k => typeof k === 'string' && k.startsWith('/') && !k.startsWith('//') && !k.includes('#');
-
-// Pure protocol step: request body + headers in, a response description out.
-// context (method, target, headers) is passed to the store so it can authorize per resource.
+// Pure protocol step: request content + headers in, a complete response out
+// ({ status, headers, body }), before content coding.
 // Status codes follow RFC 10008 Section 2.1: content that is not valid JSON is 400,
 // valid JSON that does not describe a valid request is 422.
-async function resolveSync(bodyStr, headers = {}, { store, context } = {}) {
-  const fail = (status, message) => ({ status, extraHeaders: {}, body: { error: message } });
+async function resolveSync(bodyStr, headers = {}, { store, context, links } = {}) {
   const headerValue = headers['sync-baseline'];
-  let baselines;
-  let accept;
-  let recover = true;
+  let request;
 
-  if (bodyStr && headerValue) {
-    return fail(422, 'Send baselines in the body or in Sync-Baseline, not both');
-  }
+  if (bodyStr && headerValue) return problem(422, 'Send baselines in the content or in Sync-Baseline, not both');
 
   if (!bodyStr && headerValue !== undefined) {
-    baselines = parseBaselineHeader(headerValue);
-    if (!baselines) return fail(422, 'Malformed Sync-Baseline header');
-    if (headers['sync-accept']) accept = headers['sync-accept'].split(',').map(s => s.trim()).filter(Boolean);
+    const baselines = parseBaselineHeader(headerValue);
+    if (!baselines) return problem(422, 'Malformed Sync-Baseline header');
+    request = { baselines };
+    if (headers['sync-accept']) request.accept = headers['sync-accept'].split(',').map(s => s.trim()).filter(Boolean);
   } else {
-    let parsed;
     try {
-      parsed = JSON.parse(bodyStr || '{}');
+      request = JSON.parse(bodyStr || '{}');
     } catch {
-      return fail(400, 'Request content is not valid JSON');
+      return problem(400, 'Request content is not valid JSON');
     }
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return fail(422, 'Request body must be a JSON object');
-    }
-    baselines = parsed.baselines;
-    accept = parsed.accept;
-    if (parsed.recover !== undefined) {
-      if (typeof parsed.recover !== 'boolean') return fail(422, 'recover must be a boolean');
-      recover = parsed.recover;
-    }
-
-    if (accept !== undefined && (!Array.isArray(accept) || !accept.every(a => typeof a === 'string'))) {
-      return fail(422, 'accept must be an array of media types');
+    if (request === null || typeof request !== 'object' || Array.isArray(request)) {
+      return problem(422, 'Request content must be a JSON object');
     }
   }
 
-  if (!baselines || typeof baselines !== 'object' || Array.isArray(baselines)) {
-    return fail(422, 'Missing or invalid baselines');
+  const { baselines, accept } = request;
+  if (!baselines || typeof baselines !== 'object' || Array.isArray(baselines)) return problem(422, 'Missing or invalid baselines');
+  const names = Object.keys(baselines);
+  if (!names.every(isResourceName)) return problem(422, 'Resource names must be absolute paths on this origin, such as "/users"');
+  if (!Object.values(baselines).every(b => b === null || (isVersion(b) && isPrintableVersion(b)))) {
+    return problem(422, 'Each baseline must be null, a version identifier, or an array of distinct version identifiers (printable ASCII)');
   }
-  if (!Object.values(baselines).every(t => t === null || typeof t === 'string')) {
-    return fail(422, 'Each baseline must be a string token or null');
+  if (names.length > MAX_RESOURCES) return problem(413, `At most ${MAX_RESOURCES} resources per request`);
+  if (accept !== undefined && (!Array.isArray(accept) || !accept.every(a => typeof a === 'string'))) {
+    return problem(422, 'accept must be an array of media types');
   }
-  if (!Object.keys(baselines).every(isPathAbsolute)) {
-    return fail(422, 'Resource names must be path-absolute references such as "/users"');
-  }
-  if (Object.keys(baselines).length > MAX_RESOURCES) {
-    return fail(413, `At most ${MAX_RESOURCES} resources per SYNC request`);
+  for (const flag of ['recover', 'consistent', 'links']) {
+    if (request[flag] !== undefined && typeof request[flag] !== 'boolean') return problem(422, `${flag} must be a boolean`);
   }
 
-  const { results, allUnchanged } = await computeResults(baselines, { accept, recover, store, context });
-  const extraHeaders = { 'Sync-Delta-Complete': '?1' };
-  if (allUnchanged) return { status: 204, extraHeaders, body: null };
-  return { status: 200, extraHeaders, body: { results, synced_at: new Date().toISOString() } };
+  const resultType = negotiate(headers.accept);
+  if (!resultType) return problem(406, 'Acceptable result formats: application/sync-result+json, multipart/mixed');
+
+  const { results, allUnchanged, consistent } = await computeResults(baselines, {
+    accept: accept && accept.map(a => a.toLowerCase()),
+    recover: request.recover !== false,
+    consistent: request.consistent === true,
+    links: request.links === true && links ? links : null,
+    store,
+    context,
+  });
+
+  const out = { 'Sync-Delta-Complete': '?1', Vary: 'Accept' };
+  if (request.consistent === true) out['Sync-Consistent'] = consistent ? '?1' : '?0';
+  if (allUnchanged) return { status: 204, headers: out, body: null };
+
+  if (resultType === JSON_RESULT) {
+    return { status: 200, headers: { ...out, 'Content-Type': JSON_RESULT }, body: encodeJson(results) };
+  }
+  const { body, contentType } = encodeMultipart(results);
+  return { status: 200, headers: { ...out, 'Content-Type': contentType }, body };
+}
+
+// Applies content coding and framing headers.
+function finalize(response, acceptEncoding) {
+  const headers = { ...response.headers };
+  let body = response.body || Buffer.alloc(0);
+  if (body.length >= GZIP_MIN_BYTES && /\bgzip\b/i.test(acceptEncoding || '')) {
+    body = zlib.gzipSync(body);
+    headers['Content-Encoding'] = 'gzip';
+    headers.Vary = headers.Vary ? `${headers.Vary}, Accept-Encoding` : 'Accept-Encoding';
+  }
+  headers['Content-Length'] = body.length;
+  return { status: response.status, headers, body };
+}
+
+function writeRaw(socket, response, keepAlive) {
+  let head = `HTTP/1.1 ${response.status} ${STATUS_TEXT[response.status] || ''}\r\n`;
+  for (const [k, v] of Object.entries({ ...response.headers, Connection: keepAlive ? 'keep-alive' : 'close' })) head += `${k}: ${v}\r\n`;
+  socket.write(`${head}\r\n`);
+  if (response.body.length) socket.write(response.body);
+  if (!keepAlive) socket.end();
+}
+
+// Raw-socket writer used by the experimental SYNC method front.
+function sendProblem(socket, status, detail) {
+  writeRaw(socket, finalize(problem(status, detail), ''), false);
 }
 
 async function processSync(socket, bodyStr, headers = {}, keepAlive = false, store, target = '/') {
-  let r;
+  let response;
   try {
-    r = await resolveSync(bodyStr, headers, { store, context: { method: 'SYNC', target, headers } });
+    response = await resolveSync(bodyStr, headers, { store, context: { method: 'SYNC', target, headers } });
   } catch (err) {
     console.error('SYNC store error:', err);
-    return sendResponse(socket, 500, 'Internal Server Error', {}, { error: 'Internal error' }, '', false);
+    return sendProblem(socket, 500, 'Internal error');
   }
-  sendResponse(socket, r.status, STATUS_TEXT[r.status], r.extraHeaders, r.body, headers['accept-encoding'], keepAlive);
+  if (response.status === 200 || response.status === 204) response.headers['Cache-Control'] = 'no-store';
+  writeRaw(socket, finalize(response, headers['accept-encoding']), keepAlive);
 }
 
 module.exports = {
-  processSync, resolveSync, encodeResponse, sendResponse, parseBaselineHeader,
-  MAX_BODY_BYTES, MAX_HEADER_BYTES,
+  processSync, resolveSync, finalize, problem, sendProblem, parseBaselineHeader, isResourceName,
+  MAX_BODY_BYTES, MAX_HEADER_BYTES, STATUS_TEXT,
 };

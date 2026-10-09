@@ -4,7 +4,7 @@ const http = require('http');
 const zlib = require('zlib');
 const { startServer, stopServer } = require('../src/index');
 const { addVersion, getVersion, getCurrentVersion } = require('../src/version-store');
-const { applyResult, JSON_PATCH, MERGE_PATCH, SNAPSHOT } = require('../../client/src/apply');
+const { applyResult, JSON_PATCH, MERGE_PATCH } = require('../../client/src/apply');
 
 const PORT = 3001;
 
@@ -101,7 +101,7 @@ describe('Per-resource failure isolation', () => {
     const res = await sync({ baselines: { '/users': 'v999', '/posts': 'v1' } });
     expect(res.status).toBe(200);
     expect(res.body.results['/users']).toMatchObject({
-      status: 200, format: SNAPSHOT, from: null, to: 'v3', baseline: 'unrecognized',
+      status: 200, type: 'application/json', from: null, to: 'v3', baseline: 'unrecognized',
     });
     expect(res.body.results['/users'].data).toEqual(getCurrentVersion('/users').data);
     expect(res.body.results['/posts']).toMatchObject({ status: 200, from: 'v1', to: 'v2' });
@@ -212,13 +212,19 @@ describe('Sync-Baseline header', () => {
 
   test('A single-item inner list means no baseline (snapshot)', async () => {
     const res = await rawSync({ headers: { 'Sync-Baseline': '("/posts")' } });
-    expect(res.body.results['/posts']).toMatchObject({ status: 200, format: SNAPSHOT, from: null });
+    expect(res.body.results['/posts']).toMatchObject({ status: 200, type: 'application/json', from: null });
+    expect(res.body.results['/posts']).not.toHaveProperty('format');
   });
 
-  test('Resource names containing "), (" and quotes survive the header parser', async () => {
-    const res = await rawSync({ headers: { 'Sync-Baseline': '("/a), (\\"b" "v1")' } });
+  test('Resource names containing "),(" survive the header parser', async () => {
+    const res = await rawSync({ headers: { 'Sync-Baseline': '("/a),(b" "v1")' } });
     expect(res.status).toBe(200);
-    expect(res.body.results['/a), ("b']).toEqual({ status: 404 });
+    expect(res.body.results['/a),(b']).toEqual({ status: 404 });
+  });
+
+  test('Escaped quotes are parsed, and a quote is then rejected as not valid in a resource name', async () => {
+    const res = await rawSync({ headers: { 'Sync-Baseline': '("/a\\"b" "v1")' } });
+    expect(res.status).toBe(422);
   });
 
   test('422 on a malformed header', async () => {
@@ -253,17 +259,18 @@ describe('Patch formats', () => {
 
   test('Sends a snapshot when the patch is not smaller than the resource', async () => {
     const res = await sync({ baselines: { '/tiny': 'v1' } });
-    expect(res.body.results['/tiny']).toMatchObject({ format: SNAPSHOT, from: 'v1', to: 'v2', data: { a: 2 } });
+    expect(res.body.results['/tiny']).toEqual({ status: 200, type: 'application/json', from: null, to: 'v2', data: { a: 2 } });
   });
 
   test('Unknown formats are skipped; the snapshot is the guaranteed fallback', async () => {
     const res = await sync({ baselines: { '/doc': 'v1' }, accept: ['application/x-bsdiff'] });
-    expect(res.body.results['/doc'].format).toBe(SNAPSHOT);
+    expect(res.body.results['/doc']).toMatchObject({ from: null, type: 'application/json' });
+    expect(res.body.results['/doc']).not.toHaveProperty('format');
   });
 
   test('A null baseline yields a full snapshot', async () => {
     const res = await sync({ baselines: { '/posts': null } });
-    expect(res.body.results['/posts']).toMatchObject({ status: 200, format: SNAPSHOT, from: null, to: 'v2' });
+    expect(res.body.results['/posts']).toMatchObject({ status: 200, type: 'application/json', from: null, to: 'v2' });
   });
 });
 
@@ -287,7 +294,7 @@ describe('Applying results reproduces server state', () => {
   test('applyResult rejects a patch whose baseline is not the one the client holds', async () => {
     const res = await sync({ baselines: { '/doc': 'v1' } });
     const stale = getVersion('/doc', 'v2').data;
-    expect(() => applyResult(stale, 'v2', res.body.results['/doc'])).toThrow(/baseline/);
+    expect(() => applyResult(stale, 'v2', res.body.results['/doc'])).toThrow(/local version/);
   });
 });
 

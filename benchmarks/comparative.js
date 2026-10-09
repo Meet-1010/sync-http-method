@@ -16,7 +16,21 @@ const crypto = require('crypto');
 const { braidify, fetch: braidFetch } = require('braid-http');
 
 const { syncHandler, createMemoryStore } = require('../server/src/package');
-const { buildUpdate, JSON_PATCH } = require('../server/src/delta-engine');
+const { buildUpdate, JSON_PATCH } = require('../server/src/formats');
+
+// The models and Mercure events carry a JSON Patch, or the full document as
+// application/json when that is not larger (the same rule SYNC uses).
+function delta(oldData, newData) {
+  const u = buildUpdate({ type: 'application/json', data: oldData }, { type: 'application/json', data: newData }, [JSON_PATCH]);
+  return u.full ? { format: 'application/json', data: newData } : u;
+}
+
+// Apply an update from a system that carries no SYNC versions (the models, Mercure).
+function applyUpdate(local, format, data) {
+  return format === 'application/json'
+    ? data
+    : applyResult(local, 'x', { status: 200, from: 'x', to: 'y', format, data });
+}
 const { syncRequest } = require('../client/src/sync-client');
 const { applyResult } = require('../client/src/apply');
 
@@ -200,7 +214,7 @@ function makeHandler(ctx) {
     for (let i = 0; i < N; i++) {
       const idx = history[i].findIndex(e => e.round === r);
       if (idx < 1) continue;
-      const u = buildUpdate(history[i][idx - 1].data, history[i][idx].data, [JSON_PATCH]);
+      const u = delta(history[i][idx - 1].data, history[i][idx].data);
       events.push({ topic: i, format: u.format, data: u.data });
     }
   }
@@ -224,7 +238,7 @@ function makeHandler(ctx) {
       const parents = (req.headers['parents'] || '').replace(/"/g, '');
       if (parents === cur.token) return respond(res, profile, req, 304, { 'Current-Version': `"${cur.token}"` });
       const base = history[i].find(e => e.token === parents);
-      const u = buildUpdate(base.data, cur.data, [JSON_PATCH]);
+      const u = delta(base.data, cur.data);
       return respond(res, profile, req, 200, {
         'Content-Type': u.format,
         'Version': `"${cur.token}"`,
@@ -336,7 +350,7 @@ async function mercureSetup(ctx, prefix) {
     for (let i = 0; i < ctx.N; i++) {
       const idx = ctx.history[i].findIndex(e => e.round === r);
       if (idx < 1) continue;
-      const u = buildUpdate(ctx.history[i][idx - 1].data, ctx.history[i][idx].data, [JSON_PATCH]);
+      const u = delta(ctx.history[i][idx - 1].data, ctx.history[i][idx].data);
       await mercurePublish(topic(i), JSON.stringify({ topic: i, format: u.format, data: u.data }));
       count++;
     }
@@ -416,7 +430,7 @@ const RUNNERS = {
     const agent = new http.Agent({ keepAlive: true, maxSockets: H1_POOL });
     await Promise.all(local.map(async (_, i) => {
       const r = await h1Request(agent, port, `/braid/${i}`, { ...clientHeaders(ctx.profile), Parents: '"v0"' });
-      if (r.status === 200) local[i] = applyResult(local[i], 'v0', { status: 200, format: r.headers['content-type'], from: 'v0', data: JSON.parse(r.text) });
+      if (r.status === 200) local[i] = applyUpdate(local[i], r.headers['content-type'], JSON.parse(r.text));
     }));
     agent.destroy();
     return { local, requests: ctx.N };
@@ -427,7 +441,7 @@ const RUNNERS = {
     const session = http2.connect(`http://127.0.0.1:${port}`);
     await Promise.all(local.map(async (_, i) => {
       const r = await h2Request(session, `/braid/${i}`, { ...clientHeaders(ctx.profile), parents: '"v0"' });
-      if (r.status === 200) local[i] = applyResult(local[i], 'v0', { status: 200, format: r.headers['content-type'], from: 'v0', data: JSON.parse(r.text) });
+      if (r.status === 200) local[i] = applyUpdate(local[i], r.headers['content-type'], JSON.parse(r.text));
     }));
     await new Promise(r => session.close(r));
     return { local, requests: ctx.N };
@@ -452,7 +466,7 @@ const RUNNERS = {
       const line = block.split('\n').find(l => l.startsWith('data: '));
       const ev = JSON.parse(line.slice(6));
       const i = Number(ev.topic.split('/')[2]);
-      local[i] = applyResult(local[i], null, { status: 200, format: ev.format, from: null, data: ev.data });
+      local[i] = applyUpdate(local[i], ev.format, ev.data);
     }
     return { local, requests: 1 };
   },
@@ -514,7 +528,7 @@ const RUNNERS = {
       req.end();
     });
 
-    for (const ev of events) local[ev.topic] = applyResult(local[ev.topic], null, { status: 200, format: ev.format, from: null, data: ev.data });
+    for (const ev of events) local[ev.topic] = applyUpdate(local[ev.topic], ev.format, ev.data);
     return { local, requests: 1 };
   },
 

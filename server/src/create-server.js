@@ -2,7 +2,7 @@
 
 const net = require('net');
 const http = require('http');
-const { processSync, sendResponse, MAX_BODY_BYTES, MAX_HEADER_BYTES } = require('./sync-handler');
+const { processSync, sendProblem, MAX_BODY_BYTES, MAX_HEADER_BYTES } = require('./sync-handler');
 const { syncHandler } = require('./handler');
 
 const IDLE_TIMEOUT_MS = 30_000;
@@ -77,7 +77,7 @@ function createSyncServer({ app, store } = {}) {
         if (headerEnd === -1) {
           if (buffer.length > MAX_HEADER_BYTES) {
             socket.removeListener('data', onData);
-            return sendResponse(socket, 431, 'Request Header Fields Too Large', {}, { error: 'Headers too large' });
+            return sendProblem(socket, 431, 'Headers too large');
           }
           return;
         }
@@ -87,13 +87,13 @@ function createSyncServer({ app, store } = {}) {
 
         if (headers['transfer-encoding']) {
           socket.removeListener('data', onData);
-          return sendResponse(socket, 411, 'Length Required', {}, { error: 'SYNC requires Content-Length; chunked bodies are not supported' });
+          return sendProblem(socket, 411, 'SYNC requires Content-Length; chunked bodies are not supported');
         }
 
         const contentLength = parseInt(headers['content-length'] || '0', 10);
         if (!(contentLength >= 0) || contentLength > MAX_BODY_BYTES) {
           socket.removeListener('data', onData);
-          return sendResponse(socket, 413, 'Content Too Large', {}, { error: `Body exceeds ${MAX_BODY_BYTES} bytes` });
+          return sendProblem(socket, 413, `Content exceeds ${MAX_BODY_BYTES} bytes`);
         }
 
         if (buffer.length < bodyStart + contentLength) return;

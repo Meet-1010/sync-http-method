@@ -1,37 +1,64 @@
 'use strict';
 
+const { canonical, versionKey } = require('./versions');
+
 // In-memory versioned store implementing the SYNC store interface.
-// maxVersions bounds history per resource; older tokens then get a snapshot.
+//
+//   getCurrent(resource)          -> { version, type, data } | null
+//   getVersion(resource, version) -> { version, type, data } | null
+//   snapshot()                    -> a read view of every resource at one instant
+//
+// maxVersions bounds the history kept per resource; older versions then yield
+// a full representation. commit() applies changes to several resources
+// atomically: a snapshot sees all of them or none.
 function createMemoryStore({ maxVersions = Infinity } = {}) {
-  const store = new Map();
+  const histories = new Map(); // resource -> [{ version, type, data, seq }]
+  let seq = 0;
 
-  function addVersion(resource, id, data) {
-    if (!store.has(resource)) store.set(resource, []);
-    const versions = store.get(resource);
-    versions.push({ id, data, timestamp: new Date().toISOString() });
-    if (versions.length > maxVersions) versions.splice(0, versions.length - maxVersions);
+  function append(resource, version, data, type, at) {
+    if (!histories.has(resource)) histories.set(resource, []);
+    const list = histories.get(resource);
+    list.push({ version: canonical(version), type: type || 'application/json', data, seq: at });
+    if (list.length > maxVersions) list.splice(0, list.length - maxVersions);
   }
 
-  function getVersion(resource, versionId) {
-    const versions = store.get(resource);
-    if (!versions) return null;
-    return versions.find(v => v.id === versionId) || null;
+  // addVersion(resource, version, data, type?) where version is a string or an
+  // array of strings (a merge); type defaults to application/json.
+  function addVersion(resource, version, data, type) {
+    append(resource, version, data, type, ++seq);
   }
 
-  function getCurrentVersion(resource) {
-    const versions = store.get(resource);
-    if (!versions || versions.length === 0) return null;
-    return versions[versions.length - 1];
+  // commit([{ resource, version, data, type? }, ...]) applies all at one instant.
+  function commit(changes) {
+    const at = ++seq;
+    for (const c of changes) append(c.resource, c.version, c.data, c.type, at);
   }
+
+  const view = upTo => ({
+    getCurrent(resource) {
+      const list = histories.get(resource);
+      if (!list) return null;
+      for (let i = list.length - 1; i >= 0; i--) if (list[i].seq <= upTo) return list[i];
+      return null;
+    },
+    getVersion(resource, version) {
+      const list = histories.get(resource);
+      if (!list) return null;
+      const key = versionKey(version);
+      return list.find(v => v.seq <= upTo && versionKey(v.version) === key) || null;
+    },
+  });
+
+  const live = view(Infinity);
 
   return {
     addVersion,
-    getVersion,
-    getCurrentVersion,
-    canComputeDeltaFrom: (resource, versionId) => getVersion(resource, versionId) !== null,
-    listResources: () => [...store.keys()],
-    // the two methods the SYNC resolver needs
-    getCurrent: getCurrentVersion,
+    commit,
+    getCurrent: live.getCurrent,
+    getVersion: live.getVersion,
+    getCurrentVersion: live.getCurrent,
+    snapshot: () => view(seq),
+    listResources: () => [...histories.keys()],
   };
 }
 
