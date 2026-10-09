@@ -1,0 +1,1058 @@
+[
+  {
+    "profile": "lab",
+    "N": 1,
+    "L": 1,
+    "changed": 1,
+    "protocols": {
+      "GET (full)": {
+        "up": 71,
+        "down": 21360,
+        "requests": 1,
+        "ms": 82.900417
+      },
+      "GET + ETag": {
+        "up": 92,
+        "down": 21372,
+        "requests": 1,
+        "ms": 82.97587499999997
+      },
+      "Braid-style H1": {
+        "up": 87,
+        "down": 1234,
+        "requests": 1,
+        "ms": 82.97325000000001
+      },
+      "Braid-style H2": {
+        "up": 120,
+        "down": 1187,
+        "requests": 1,
+        "ms": 84.77379100000007
+      },
+      "Mercure-style": {
+        "up": 101,
+        "down": 1291,
+        "requests": 1,
+        "ms": 81.56858300000022
+      },
+      "SYNC": {
+        "up": 209,
+        "down": 1320,
+        "requests": 1,
+        "ms": 82.18662500000028
+      }
+    }
+  },
+  {
+    "profile": "lab",
+    "N": 1,
+    "L": 5,
+    "changed": 1,
+    "protocols": {
+      "GET (full)": {
+        "up": 71,
+        "down": 21413,
+        "requests": 1,
+        "ms": 82.05158399999982
+      },
+      "GET + ETag": {
+        "up": 92,
+        "down": 21425,
+        "requests": 1,
+        "ms": 82.2856670000001
+      },
+      "Braid-style H1": {
+        "up": 87,
+        "down": 5344,
+        "requests": 1,
+        "ms": 83.26808399999982
+      },
+      "Braid-style H2": {
+        "up": 120,
+        "down": 5297,
+        "requests": 1,
+        "ms": 83.25012499999957
+      },
+      "Mercure-style": {
+        "up": 101,
+        "down": 5745,
+        "requests": 1,
+        "ms": 82.89950000000044
+      },
+      "SYNC": {
+        "up": 209,
+        "down": 5430,
+        "requests": 1,
+        "ms": 82.58866699999999
+      }
+    }
+  },
+  {
+    "profile": "lab",
+    "N": 1,
+    "L": 25,
+    "changed": 1,
+    "protocols": {
+      "GET (full)": {
+        "up": 71,
+        "down": 21490,
+        "requests": 1,
+        "ms": 82.38674999999967
+      },
+      "GET + ETag": {
+        "up": 92,
+        "down": 21503,
+        "requests": 1,
+        "ms": 82.07683300000008
+      },
+      "Braid-style H1": {
+        "up": 87,
+        "down": 19751,
+        "requests": 1,
+        "ms": 83.41866599999958
+      },
+      "Braid-style H2": {
+        "up": 120,
+        "down": 19713,
+        "requests": 1,
+        "ms": 86.24412499999926
+      },
+      "Mercure-style": {
+        "up": 101,
+        "down": 28002,
+        "requests": 1,
+        "ms": 87.22283300000072
+      },
+      "SYNC": {
+        "up": 210,
+        "down": 19837,
+        "requests": 1,
+        "ms": 83.74175000000014
+      }
+    }
+  },
+  {
+    "profile": "lab",
+    "N": 10,
+    "L": 1,
+    "changed": 3,
+    "protocols": {
+      "GET (full)": {
+        "up": 710,
+        "down": 213743,
+        "requests": 10,
+        "ms": 130.7567909999998
+      },
+      "GET + ETag": {
+        "up": 920,
+        "down": 65029,
+        "requests": 10,
+        "ms": 126.44387500000084
+      },
+      "Braid-style H1": {
+        "up": 870,
+        "down": 4707,
+        "requests": 10,
+        "ms": 127.99004200000127
+      },
+      "Braid-style H2": {
+        "up": 309,
+        "down": 3434,
+        "requests": 10,
+        "ms": 88.02891699999964
+      },
+      "Mercure-style": {
+        "up": 236,
+        "down": 3540,
+        "requests": 1,
+        "ms": 84.99191599999904
+      },
+      "SYNC": {
+        "up": 400,
+        "down": 3887,
+        "requests": 1,
+        "ms": 85.54704200000015
+      }
+    }
+  },
+  {
+    "profile": "lab",
+    "N": 10,
+    "L": 5,
+    "changed": 8,
+    "protocols": {
+      "GET (full)": {
+        "up": 710,
+        "down": 213860,
+        "requests": 10,
+        "ms": 127.71933400000125
+      },
+      "GET + ETag": {
+        "up": 920,
+        "down": 171456,
+        "requests": 10,
+        "ms": 127.76575000000048
+      },
+      "Braid-style H1": {
+        "up": 870,
+        "down": 17500,
+        "requests": 10,
+        "ms": 132.8407499999994
+      },
+      "Braid-style H2": {
+        "up": 309,
+        "down": 15960,
+        "requests": 10,
+        "ms": 90.36908299999959
+      },
+      "Mercure-style": {
+        "up": 236,
+        "down": 16941,
+        "requests": 1,
+        "ms": 86.17883299999994
+      },
+      "SYNC": {
+        "up": 400,
+        "down": 16551,
+        "requests": 1,
+        "ms": 88.09104099999968
+      }
+    }
+  },
+  {
+    "profile": "lab",
+    "N": 10,
+    "L": 25,
+    "changed": 10,
+    "protocols": {
+      "GET (full)": {
+        "up": 710,
+        "down": 213965,
+        "requests": 10,
+        "ms": 127.480458
+      },
+      "GET + ETag": {
+        "up": 920,
+        "down": 214086,
+        "requests": 10,
+        "ms": 127.99799999999959
+      },
+      "Braid-style H1": {
+        "up": 870,
+        "down": 67563,
+        "requests": 10,
+        "ms": 133.33137499999975
+      },
+      "Braid-style H2": {
+        "up": 322,
+        "down": 65938,
+        "requests": 10,
+        "ms": 92.79483299999993
+      },
+      "Mercure-style": {
+        "up": 236,
+        "down": 80354,
+        "requests": 1,
+        "ms": 93.16849999999977
+      },
+      "SYNC": {
+        "up": 410,
+        "down": 66571,
+        "requests": 1,
+        "ms": 92.60712500000045
+      }
+    }
+  },
+  {
+    "profile": "lab",
+    "N": 50,
+    "L": 1,
+    "changed": 12,
+    "protocols": {
+      "GET (full)": {
+        "up": 3590,
+        "down": 1068731,
+        "requests": 50,
+        "ms": 415.80658400000175
+      },
+      "GET + ETag": {
+        "up": 4640,
+        "down": 261375,
+        "requests": 50,
+        "ms": 413.1723750000019
+      },
+      "Braid-style H1": {
+        "up": 4390,
+        "down": 20092,
+        "requests": 50,
+        "ms": 424.1707920000008
+      },
+      "Braid-style H2": {
+        "up": 1189,
+        "down": 13337,
+        "requests": 50,
+        "ms": 90.16779200000019
+      },
+      "Mercure-style": {
+        "up": 876,
+        "down": 13496,
+        "requests": 1,
+        "ms": 84.82037499999933
+      },
+      "SYNC": {
+        "up": 1281,
+        "down": 15279,
+        "requests": 1,
+        "ms": 86.94787500000166
+      }
+    }
+  },
+  {
+    "profile": "lab",
+    "N": 50,
+    "L": 5,
+    "changed": 41,
+    "protocols": {
+      "GET (full)": {
+        "up": 3590,
+        "down": 1068911,
+        "requests": 50,
+        "ms": 421.83129199999894
+      },
+      "GET + ETag": {
+        "up": 4640,
+        "down": 878153,
+        "requests": 50,
+        "ms": 411.8195000000014
+      },
+      "Braid-style H1": {
+        "up": 4390,
+        "down": 70915,
+        "requests": 50,
+        "ms": 422.5066250000018
+      },
+      "Braid-style H2": {
+        "up": 1202,
+        "down": 62501,
+        "requests": 50,
+        "ms": 105.54179199999999
+      },
+      "Mercure-style": {
+        "up": 876,
+        "down": 67050,
+        "requests": 1,
+        "ms": 97.78508299999885
+      },
+      "SYNC": {
+        "up": 1281,
+        "down": 65348,
+        "requests": 1,
+        "ms": 103.10462499999994
+      }
+    }
+  },
+  {
+    "profile": "lab",
+    "N": 50,
+    "L": 25,
+    "changed": 50,
+    "protocols": {
+      "GET (full)": {
+        "up": 3590,
+        "down": 1070443,
+        "requests": 50,
+        "ms": 427.19762499999706
+      },
+      "GET + ETag": {
+        "up": 4640,
+        "down": 1071046,
+        "requests": 50,
+        "ms": 427.1035840000004
+      },
+      "Braid-style H1": {
+        "up": 4390,
+        "down": 281624,
+        "requests": 50,
+        "ms": 448.2804160000014
+      },
+      "Braid-style H2": {
+        "up": 1280,
+        "down": 272979,
+        "requests": 50,
+        "ms": 351.0380830000031
+      },
+      "Mercure-style": {
+        "up": 876,
+        "down": 317402,
+        "requests": 1,
+        "ms": 119.70937500000218
+      },
+      "SYNC": {
+        "up": 1331,
+        "down": 275869,
+        "requests": 1,
+        "ms": 113.83004199999777
+      }
+    }
+  },
+  {
+    "profile": "lab",
+    "N": 100,
+    "L": 1,
+    "changed": 16,
+    "protocols": {
+      "GET (full)": {
+        "up": 7190,
+        "down": 2137549,
+        "requests": 100,
+        "ms": 770.7673339999965
+      },
+      "GET + ETag": {
+        "up": 9290,
+        "down": 352741,
+        "requests": 100,
+        "ms": 755.7316250000003
+      },
+      "Braid-style H1": {
+        "up": 8790,
+        "down": 31382,
+        "requests": 100,
+        "ms": 753.2944169999973
+      },
+      "Braid-style H2": {
+        "up": 2289,
+        "down": 18195,
+        "requests": 100,
+        "ms": 106.62779199999932
+      },
+      "Mercure-style": {
+        "up": 1676,
+        "down": 17997,
+        "requests": 1,
+        "ms": 94.62020800000028
+      },
+      "SYNC": {
+        "up": 2481,
+        "down": 21865,
+        "requests": 1,
+        "ms": 98.04104099999677
+      }
+    }
+  },
+  {
+    "profile": "lab",
+    "N": 100,
+    "L": 5,
+    "changed": 69,
+    "protocols": {
+      "GET (full)": {
+        "up": 7190,
+        "down": 2137872,
+        "requests": 100,
+        "ms": 769.9665830000013
+      },
+      "GET + ETag": {
+        "up": 9290,
+        "down": 1479950,
+        "requests": 100,
+        "ms": 769.6757910000015
+      },
+      "Braid-style H1": {
+        "up": 8790,
+        "down": 125487,
+        "requests": 100,
+        "ms": 797.9915000000037
+      },
+      "Braid-style H2": {
+        "up": 2328,
+        "down": 109440,
+        "requests": 100,
+        "ms": 197.002041000007
+      },
+      "Mercure-style": {
+        "up": 1676,
+        "down": 116315,
+        "requests": 1,
+        "ms": 107.16916700000002
+      },
+      "SYNC": {
+        "up": 2481,
+        "down": 114593,
+        "requests": 1,
+        "ms": 113.68183300000237
+      }
+    }
+  },
+  {
+    "profile": "lab",
+    "N": 100,
+    "L": 25,
+    "changed": 100,
+    "protocols": {
+      "GET (full)": {
+        "up": 7190,
+        "down": 2139591,
+        "requests": 100,
+        "ms": 775.6705829999992
+      },
+      "GET + ETag": {
+        "up": 9290,
+        "down": 2140794,
+        "requests": 100,
+        "ms": 774.6179580000025
+      },
+      "Braid-style H1": {
+        "up": 8790,
+        "down": 539034,
+        "requests": 100,
+        "ms": 822.9346670000014
+      },
+      "Braid-style H2": {
+        "up": 2471,
+        "down": 521560,
+        "requests": 100,
+        "ms": 639.4873750000042
+      },
+      "Mercure-style": {
+        "up": 1676,
+        "down": 608558,
+        "requests": 1,
+        "ms": 135.31500000000233
+      },
+      "SYNC": {
+        "up": 2581,
+        "down": 527431,
+        "requests": 1,
+        "ms": 117.30537499999627
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 1,
+    "L": 1,
+    "changed": 1,
+    "protocols": {
+      "GET (full)": {
+        "up": 650,
+        "down": 4808,
+        "requests": 1,
+        "ms": 83.32454199999484
+      },
+      "GET + ETag": {
+        "up": 671,
+        "down": 4820,
+        "requests": 1,
+        "ms": 83.47358299999905
+      },
+      "Braid-style H1": {
+        "up": 666,
+        "down": 1234,
+        "requests": 1,
+        "ms": 81.67812499999854
+      },
+      "Braid-style H2": {
+        "up": 524,
+        "down": 1187,
+        "requests": 1,
+        "ms": 84.16791699999885
+      },
+      "Mercure-style": {
+        "up": 657,
+        "down": 1291,
+        "requests": 1,
+        "ms": 81.52608299999702
+      },
+      "SYNC": {
+        "up": 794,
+        "down": 639,
+        "requests": 1,
+        "ms": 82.55333399999654
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 1,
+    "L": 5,
+    "changed": 1,
+    "protocols": {
+      "GET (full)": {
+        "up": 650,
+        "down": 4865,
+        "requests": 1,
+        "ms": 82.67579100000148
+      },
+      "GET + ETag": {
+        "up": 671,
+        "down": 4877,
+        "requests": 1,
+        "ms": 81.97099999999773
+      },
+      "Braid-style H1": {
+        "up": 666,
+        "down": 1372,
+        "requests": 1,
+        "ms": 82.96291700000438
+      },
+      "Braid-style H2": {
+        "up": 524,
+        "down": 1296,
+        "requests": 1,
+        "ms": 83.72779199999786
+      },
+      "Mercure-style": {
+        "up": 657,
+        "down": 5745,
+        "requests": 1,
+        "ms": 83.12983399999939
+      },
+      "SYNC": {
+        "up": 794,
+        "down": 1409,
+        "requests": 1,
+        "ms": 82.25529200000165
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 1,
+    "L": 25,
+    "changed": 1,
+    "protocols": {
+      "GET (full)": {
+        "up": 650,
+        "down": 5040,
+        "requests": 1,
+        "ms": 83.89929200000188
+      },
+      "GET + ETag": {
+        "up": 671,
+        "down": 5053,
+        "requests": 1,
+        "ms": 82.76170800000546
+      },
+      "Braid-style H1": {
+        "up": 666,
+        "down": 3762,
+        "requests": 1,
+        "ms": 83.44512499999837
+      },
+      "Braid-style H2": {
+        "up": 524,
+        "down": 3686,
+        "requests": 1,
+        "ms": 84.72883400000865
+      },
+      "Mercure-style": {
+        "up": 657,
+        "down": 28002,
+        "requests": 1,
+        "ms": 87.00587499998801
+      },
+      "SYNC": {
+        "up": 795,
+        "down": 3811,
+        "requests": 1,
+        "ms": 83.88112499999988
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 10,
+    "L": 1,
+    "changed": 3,
+    "protocols": {
+      "GET (full)": {
+        "up": 6500,
+        "down": 48075,
+        "requests": 10,
+        "ms": 134.91204200001084
+      },
+      "GET + ETag": {
+        "up": 6710,
+        "down": 15358,
+        "requests": 10,
+        "ms": 130.2846669999999
+      },
+      "Braid-style H1": {
+        "up": 6660,
+        "down": 3440,
+        "requests": 10,
+        "ms": 128.68741600000067
+      },
+      "Braid-style H2": {
+        "up": 2720,
+        "down": 2095,
+        "requests": 10,
+        "ms": 86.54699999999139
+      },
+      "Mercure-style": {
+        "up": 792,
+        "down": 3540,
+        "requests": 1,
+        "ms": 83.63179099999252
+      },
+      "SYNC": {
+        "up": 1039,
+        "down": 1058,
+        "requests": 1,
+        "ms": 85.16320799999812
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 10,
+    "L": 5,
+    "changed": 8,
+    "protocols": {
+      "GET (full)": {
+        "up": 6500,
+        "down": 48241,
+        "requests": 10,
+        "ms": 135.27999999999884
+      },
+      "GET + ETag": {
+        "up": 6710,
+        "down": 38979,
+        "requests": 10,
+        "ms": 133.40529199999582
+      },
+      "Braid-style H1": {
+        "up": 6660,
+        "down": 6681,
+        "requests": 10,
+        "ms": 131.9983329999959
+      },
+      "Braid-style H2": {
+        "up": 2720,
+        "down": 4805,
+        "requests": 10,
+        "ms": 89.40695899999992
+      },
+      "Mercure-style": {
+        "up": 792,
+        "down": 16941,
+        "requests": 1,
+        "ms": 86.16887500000303
+      },
+      "SYNC": {
+        "up": 1039,
+        "down": 3075,
+        "requests": 1,
+        "ms": 88.3449169999949
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 10,
+    "L": 25,
+    "changed": 10,
+    "protocols": {
+      "GET (full)": {
+        "up": 6500,
+        "down": 48907,
+        "requests": 10,
+        "ms": 135.88891700000386
+      },
+      "GET + ETag": {
+        "up": 6710,
+        "down": 49028,
+        "requests": 10,
+        "ms": 138.1160419999942
+      },
+      "Braid-style H1": {
+        "up": 6660,
+        "down": 16332,
+        "requests": 10,
+        "ms": 136.41895799999475
+      },
+      "Braid-style H2": {
+        "up": 2720,
+        "down": 14274,
+        "requests": 10,
+        "ms": 95.07679199999257
+      },
+      "Mercure-style": {
+        "up": 792,
+        "down": 80354,
+        "requests": 1,
+        "ms": 95.04466699999466
+      },
+      "SYNC": {
+        "up": 1049,
+        "down": 10591,
+        "requests": 1,
+        "ms": 91.50975000001199
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 50,
+    "L": 1,
+    "changed": 12,
+    "protocols": {
+      "GET (full)": {
+        "up": 32540,
+        "down": 240324,
+        "requests": 50,
+        "ms": 463.31195899999875
+      },
+      "GET + ETag": {
+        "up": 33590,
+        "down": 62666,
+        "requests": 50,
+        "ms": 433.58024999999907
+      },
+      "Braid-style H1": {
+        "up": 33340,
+        "down": 16289,
+        "requests": 50,
+        "ms": 425.7659580000036
+      },
+      "Braid-style H2": {
+        "up": 12520,
+        "down": 9286,
+        "requests": 50,
+        "ms": 98.79649999999674
+      },
+      "Mercure-style": {
+        "up": 1432,
+        "down": 13496,
+        "requests": 1,
+        "ms": 88.68608400000085
+      },
+      "SYNC": {
+        "up": 2160,
+        "down": 2565,
+        "requests": 1,
+        "ms": 93.56287499998871
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 50,
+    "L": 5,
+    "changed": 41,
+    "protocols": {
+      "GET (full)": {
+        "up": 32540,
+        "down": 240958,
+        "requests": 50,
+        "ms": 462.34116599999834
+      },
+      "GET + ETag": {
+        "up": 33590,
+        "down": 199339,
+        "requests": 50,
+        "ms": 462.408958
+      },
+      "Braid-style H1": {
+        "up": 33340,
+        "down": 34871,
+        "requests": 50,
+        "ms": 447.9675409999909
+      },
+      "Braid-style H2": {
+        "up": 12520,
+        "down": 24976,
+        "requests": 50,
+        "ms": 105.03391600000032
+      },
+      "Mercure-style": {
+        "up": 1432,
+        "down": 67050,
+        "requests": 1,
+        "ms": 96.69737500000338
+      },
+      "SYNC": {
+        "up": 2160,
+        "down": 9445,
+        "requests": 1,
+        "ms": 103.83625000000757
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 50,
+    "L": 25,
+    "changed": 50,
+    "protocols": {
+      "GET (full)": {
+        "up": 32540,
+        "down": 243725,
+        "requests": 50,
+        "ms": 465.87533299998904
+      },
+      "GET + ETag": {
+        "up": 33590,
+        "down": 244328,
+        "requests": 50,
+        "ms": 466.7879590000084
+      },
+      "Braid-style H1": {
+        "up": 33340,
+        "down": 71871,
+        "requests": 50,
+        "ms": 462.71579100000963
+      },
+      "Braid-style H2": {
+        "up": 12533,
+        "down": 60806,
+        "requests": 50,
+        "ms": 113.71929199999431
+      },
+      "Mercure-style": {
+        "up": 1432,
+        "down": 317402,
+        "requests": 1,
+        "ms": 120.64075000000594
+      },
+      "SYNC": {
+        "up": 2210,
+        "down": 40172,
+        "requests": 1,
+        "ms": 111.6907910000009
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 100,
+    "L": 1,
+    "changed": 16,
+    "protocols": {
+      "GET (full)": {
+        "up": 65090,
+        "down": 480611,
+        "requests": 100,
+        "ms": 840.8631670000032
+      },
+      "GET + ETag": {
+        "up": 67190,
+        "down": 87767,
+        "requests": 100,
+        "ms": 774.4850830000069
+      },
+      "Braid-style H1": {
+        "up": 66690,
+        "down": 25707,
+        "requests": 100,
+        "ms": 767.5020420000073
+      },
+      "Braid-style H2": {
+        "up": 24770,
+        "down": 12140,
+        "requests": 100,
+        "ms": 106.62354099999357
+      },
+      "Mercure-style": {
+        "up": 2232,
+        "down": 17997,
+        "requests": 1,
+        "ms": 95.28520899999421
+      },
+      "SYNC": {
+        "up": 3660,
+        "down": 3188,
+        "requests": 1,
+        "ms": 98.81174999999348
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 100,
+    "L": 5,
+    "changed": 69,
+    "protocols": {
+      "GET (full)": {
+        "up": 65090,
+        "down": 481704,
+        "requests": 100,
+        "ms": 844.6782910000038
+      },
+      "GET + ETag": {
+        "up": 67190,
+        "down": 337483,
+        "requests": 100,
+        "ms": 825.6830420000042
+      },
+      "Braid-style H1": {
+        "up": 66690,
+        "down": 62408,
+        "requests": 100,
+        "ms": 807.6961670000019
+      },
+      "Braid-style H2": {
+        "up": 24783,
+        "down": 43721,
+        "requests": 100,
+        "ms": 120.19595800001116
+      },
+      "Mercure-style": {
+        "up": 2232,
+        "down": 116315,
+        "requests": 1,
+        "ms": 104.52550000000338
+      },
+      "SYNC": {
+        "up": 3660,
+        "down": 15011,
+        "requests": 1,
+        "ms": 113.79204200000095
+      }
+    }
+  },
+  {
+    "profile": "realistic",
+    "N": 100,
+    "L": 25,
+    "changed": 100,
+    "protocols": {
+      "GET (full)": {
+        "up": 65090,
+        "down": 487374,
+        "requests": 100,
+        "ms": 847.7823749999952
+      },
+      "GET + ETag": {
+        "up": 67190,
+        "down": 488577,
+        "requests": 100,
+        "ms": 838.8061250000028
+      },
+      "Braid-style H1": {
+        "up": 66690,
+        "down": 139861,
+        "requests": 100,
+        "ms": 833.8155829999887
+      },
+      "Braid-style H2": {
+        "up": 24809,
+        "down": 117749,
+        "requests": 100,
+        "ms": 211.8522079999966
+      },
+      "Mercure-style": {
+        "up": 2232,
+        "down": 608558,
+        "requests": 1,
+        "ms": 132.21920799999498
+      },
+      "SYNC": {
+        "up": 3760,
+        "down": 75424,
+        "requests": 1,
+        "ms": 116.25708399999712
+      }
+    }
+  }
+]

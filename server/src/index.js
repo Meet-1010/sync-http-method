@@ -3,7 +3,7 @@
 const net = require('net');
 const http = require('http');
 const express = require('express');
-const { processSync } = require('./sync-handler');
+const { processSync, sendResponse, MAX_BODY_BYTES, MAX_HEADER_BYTES } = require('./sync-handler');
 
 const app = express();
 app.use(express.json());
@@ -46,7 +46,13 @@ const server = net.createServer(socket => {
 
     // For SYNC: accumulate until headers + full body are present
     const headerEnd = buffer.indexOf('\r\n\r\n');
-    if (headerEnd === -1) return;
+    if (headerEnd === -1) {
+      if (buffer.length > MAX_HEADER_BYTES) {
+        socket.removeListener('data', onData);
+        sendResponse(socket, 431, 'Request Header Fields Too Large', {}, { error: 'Headers too large' });
+      }
+      return;
+    }
 
     const headerSection = buffer.slice(0, headerEnd).toString('utf8');
     const lines = headerSection.split('\r\n');
@@ -61,11 +67,16 @@ const server = net.createServer(socket => {
     const contentLength = parseInt(headers['content-length'] || '0', 10);
     const bodyStart = headerEnd + 4;
 
+    if (!(contentLength >= 0) || contentLength > MAX_BODY_BYTES) {
+      socket.removeListener('data', onData);
+      return sendResponse(socket, 413, 'Content Too Large', {}, { error: `Body exceeds ${MAX_BODY_BYTES} bytes` });
+    }
+
     if (buffer.length < bodyStart + contentLength) return; // need more data
 
     socket.removeListener('data', onData);
     const bodyStr = buffer.slice(bodyStart, bodyStart + contentLength).toString('utf8');
-    processSync(socket, bodyStr);
+    processSync(socket, bodyStr, headers);
   }
 
   socket.on('data', onData);

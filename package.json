@@ -6,7 +6,8 @@
   "scripts": {
     "test": "jest server/tests --forceExit",
     "start": "node server/src/index.js",
-    "demo": "node demo/demo.js"
+    "demo": "node demo/demo.js",
+    "bench": "node benchmarks/comparative.js"
   },
   "keywords": [],
   "author": "",

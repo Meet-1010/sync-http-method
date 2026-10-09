@@ -1,179 +1,143 @@
-# SYNC HTTP Method — Security Analysis
+# SYNC HTTP Method: Security Analysis (revision -01)
 
----
+This document accompanies `SYNC-method-draft.md`. Terminology follows the draft: a client sends a **baseline map** (resource to opaque version token or `null`) and receives one **result** per resource.
 
 ## 1. Threat Model
 
-### Actors
+**Attackers considered**
 
-**Attacker types considered:**
+- **On-path attacker (MITM):** reads or modifies traffic when TLS is absent or misconfigured.
+- **Malicious client:** crafts requests to probe server history, to enumerate resources, or to consume server resources.
+- **Malicious or compromised server:** returns fabricated patches to corrupt client state (relevant when a client syncs from servers it does not fully control).
+- **Cross-origin page:** a web page the victim visits that tries to make the victim's browser issue SYNC requests.
 
-- **Man-in-the-Middle (MITM):** An attacker positioned between client and server on the network path, capable of reading or modifying HTTP traffic. Relevant when TLS is absent or improperly configured.
-- **Malicious Client:** A client that deliberately sends crafted SYNC requests — oversized version vectors, probing requests designed to enumerate server history, or replayed old version IDs — to extract information or degrade server performance.
-- **Malicious Server:** A server that returns fabricated or manipulated delta responses to cause the client to apply incorrect state. Relevant in federated or multi-origin architectures where clients interact with servers they do not fully control.
+**Assets**
 
-### Assets at Risk
+| Asset | Risk |
+|---|---|
+| Baseline map | Reveals what the client holds and roughly when it last synced |
+| Results | Tampering corrupts client state; disclosure reveals server state |
+| Version-token space | Enumeration maps server history |
+| Server compute | Large batches multiply per-request work |
+| Resource namespace | Per-resource status can reveal which resources exist |
 
-| Asset | Risk | Impact |
-|---|---|---|
-| **Version vectors** | Disclosure reveals client's internal state | Privacy leak; enables targeted attacks |
-| **Delta payloads** | Tampering corrupts client state | Data integrity violation |
-| **Version ID space** | Enumeration maps server history | Information disclosure |
-| **Server compute** | Amplification via large vectors | Denial of service |
-| **Response cache** | Stale delta served from cache | Client state divergence |
+## 2. Implementation Status of Mitigations
 
----
+The reference server is a research implementation. This table says which mitigations it actually enforces, so that nothing in this document is read as a claim about the code that is not true.
 
-## 2. Attack Vectors and Mitigations
+| Mitigation | Reference server |
+|---|---|
+| Max 100 resources per request, `413` | Implemented |
+| Max 64 KiB request body, `413` before buffering | Implemented |
+| Max 16 KiB header section, `431` | Implemented |
+| `Cache-Control: no-store` on responses | Implemented |
+| Client checks `from` equals held baseline before applying | Implemented in `client/src/apply.js` |
+| Per-resource failure isolation (no whole-request failure from one bad entry) | Implemented |
+| Prototype-pollution-safe handling of resource names such as `__proto__` | Implemented, tested |
+| Opaque, unguessable tokens | **Not implemented.** Demo data uses `v1`, `v2`; a deployment must not |
+| TLS | **Not implemented.** Run behind a TLS terminator |
+| Authentication and per-resource authorization | **Not implemented** |
+| Rate limiting | **Not implemented** |
+| Per-request computation time bound | **Not implemented** |
+| Signed results (`HMAC`) | **Not implemented**, optional in the draft |
 
-### a) Version Rollback Attack
+## 3. Attack Vectors and Mitigations
 
-**Description:**
-An attacker who has observed or captured a previous SYNC request replays an old version vector. If the server accepts it, the client receives a delta from an old baseline, potentially re-applying already-applied operations or overwriting valid state with stale data.
+### a) Version rollback and replayed responses
 
-**Attack scenario:**
+**Description.** An attacker (or a misbehaving cache) replays an old response. If the client applies a patch computed from a different baseline than the one it holds, local state silently diverges.
+
 ```
-Client real state: { /feed: v45 }
-Attacker replays:  { /feed: v1  }
-Server responds:   full delta from v1 → v45 (large, stale)
-Client misapplies: double-applies operations, corrupts state
-```
-
-**Mitigations:**
-- The server MUST treat SYNC requests as idempotent and safe — they do not mutate server state, so a rollback causes no server-side harm.
-- Clients MUST validate that `to_version` in the response is strictly later than their current known version before applying a delta.
-- Version IDs SHOULD be monotonically increasing or timestamp-based so clients can detect rollback without contacting the server.
-- For sensitive resources, version tokens SHOULD be HMACs over the resource state, making forged tokens computationally infeasible.
-
----
-
-### b) State Poisoning via Forged Delta
-
-**Description:**
-A MITM intercepts a legitimate SYNC response and replaces or augments the `operations` array with fabricated JSON Patch operations. The client applies the poisoned delta, corrupting its local state with attacker-controlled data.
-
-**Attack scenario:**
-```
-Server sends:   { "op": "replace", "path": "/users/1/role", "value": "user" }
-Attacker injects: { "op": "replace", "path": "/users/1/role", "value": "admin" }
-Client applies: elevated privilege in local state
+Client holds:  /feed at token T5
+Replayed:      patch with from = T1, to = T3
+Client applies it to T5 state -> corrupt
 ```
 
-**Mitigations:**
-- **TLS is required.** SYNC MUST be deployed over HTTPS in production. Without TLS, response integrity cannot be guaranteed.
-- For highly sensitive resources, the server SHOULD include an HMAC signature over the serialized delta body using a pre-shared secret or a session key derived during TLS handshake:
-  ```
-  Sync-Delta-Signature: hmac-sha256=<hex>
-  ```
-- Clients SHOULD verify this signature before applying any operations when it is present.
-- JSON Patch operations SHOULD be applied in a transactional manner: if any operation fails validation, the entire delta MUST be rejected.
+**Mitigations**
 
----
+- Clients MUST verify that a patch's `from` equals the baseline they hold and discard it otherwise. (Implemented: `applyResult` throws and leaves state untouched.)
+- Servers SHOULD send `Cache-Control: no-store`. (Implemented.)
+- Snapshots are not subject to this check, since they replace state wholesale. A replayed snapshot rolls the client back to older state without any `from` mismatch to detect. Where freshness matters, tokens SHOULD be ordered or signed so the client can reject a `to` older than what it holds.
 
-### c) Version Vector Enumeration
+### b) State poisoning via forged patch
 
-**Description:**
-An attacker probes version IDs by sending SYNC requests with guessed version strings. A `409 Conflict` response confirms the ID is unrecognizable; a `200` or `204` confirms it exists. By bisecting the version space, the attacker can map the server's full version history and infer when resources changed.
+**Description.** An on-path attacker rewrites patch operations, for example changing a role field.
 
-**Attack scenario:**
-```
-SYNC with { /users: "v1" } → 200 (v1 exists)
-SYNC with { /users: "v5" } → 200 (v5 exists)
-SYNC with { /users: "v3" } → 200 (v3 exists)
-Attacker now knows: resource had versions v1, v3, v5 → timestamps of changes
-```
+**Mitigations**
 
-**Mitigations:**
-- Version tokens MUST be opaque and non-guessable. Use UUIDs (128-bit random) or HMAC-SHA256 hashes rather than sequential integers.
-- Sequential integer version IDs (`v1`, `v2`, `v3`) MUST NOT be used in production deployments where version history is sensitive.
-- The server SHOULD apply per-client rate limiting on SYNC requests to make enumeration attacks slow and detectable.
-- Authentication SHOULD be required before any version information is revealed.
+- TLS is REQUIRED in production.
+- For high-value resources, servers MAY sign result documents and clients SHOULD verify the signature before applying.
+- Clients SHOULD apply a patch atomically: if any operation fails, the local state MUST be left unchanged. (Implemented: `applyResult` operates on a copy for JSON Patch.)
+- A malicious *server* can always send arbitrary state; signatures protect against on-path attackers, not against a server the client has chosen to trust.
 
----
+### c) Baseline probing (previously "409 oracle" and "enumeration")
 
-### d) Amplification via Giant Version Vector
+**Description.** Any protocol in which a client presents a resume cursor lets a prober learn whether the cursor is recognized. In SYNC this is visible in two ways: a patch response (token recognized) versus a snapshot with `"baseline": "unrecognized"` or a `409`. By probing guessed tokens, an attacker can map which tokens exist and so infer when resources changed.
 
-**Description:**
-A malicious client sends a SYNC request with an extremely large version vector — thousands of resource entries — forcing the server to perform expensive delta computation for each entry, potentially exhausting CPU or memory.
+Mercure documents a related leak: its event cursors let a subscriber infer the existence and approximate timing of events it cannot read. This is a property of cursor-based resumption in general, not a SYNC-specific flaw.
 
-**Attack scenario:**
-```
-version_vector: {
-  "/resource/1": "v1", "/resource/2": "v1", ..., "/resource/10000": "v1"
-}
-```
-Server must look up 10,000 resources and compute 10,000 diffs in a single request.
+**Mitigations**
 
-**Mitigations:**
-- Servers MUST enforce a maximum version vector size. The `413 Content Too Large` response code is defined for this case.
-- A reasonable default limit is 100 resources per SYNC request; this SHOULD be configurable.
-- The `Content-Length` header SHOULD be validated against a byte limit (e.g., 64 KB) before the body is parsed.
-- Servers SHOULD implement per-client rate limiting and per-IP request quotas.
-- Delta computation SHOULD be time-bounded; if computation exceeds a threshold (e.g., 500ms), the server SHOULD return `503 Service Unavailable` rather than blocking indefinitely.
+- Tokens MUST be opaque and unguessable (random identifiers or keyed hashes). Sequential integers MUST NOT be used where history is sensitive.
+- Servers SHOULD rate-limit per authenticated identity.
+- Servers that must not reveal token validity SHOULD omit the `baseline` member and MAY answer every resource with a snapshot (at a bandwidth cost). With unguessable tokens the residual leak is only that a client already holding a valid token learns it is still valid, which it knew.
+- With `recover: true` (the default) an unrecognized baseline no longer produces a distinct error status, which removes the explicit `409` oracle of revision -00. It does not remove the patch-versus-snapshot distinction described above.
 
----
+### d) Amplification via large baseline maps
 
-### e) 409 Oracle Attack
+**Description.** A request naming thousands of resources forces thousands of diffs.
 
-**Description:**
-The `409 Conflict` response reveals that a given version ID is not in the server's history. By systematically probing with different version IDs and observing whether the response is `200`, `204`, or `409`, an attacker can fingerprint the server's version history even without being able to guess the actual version tokens (if they are not random).
+**Mitigations**
 
-**Attack scenario:**
-```
-SYNC { /users: "abc123" } → 409   # "abc123" not in history
-SYNC { /users: "def456" } → 200   # "def456" is in history
-```
-Combined with a known version token (obtained legitimately), the attacker can probe what other tokens existed between them.
+- Servers MUST cap resources per request (default 100) and body size (default 64 KiB), answering `413`. (Implemented, including checking `Content-Length` before buffering.)
+- Servers SHOULD bound delta-computation time and MAY return `Sync-Delta-Complete: false` with the remaining resources omitted. (Not implemented in the reference server.)
+- Per-client rate limiting and quotas. (Not implemented.)
+- Note that batching changes the cost model: one request can be as expensive as 100 GETs while looking like one request to a request-counting rate limiter. Limiters SHOULD account for resources processed, not just requests received.
 
-**Mitigations:**
-- As with version vector enumeration, version tokens MUST be opaque and unguessable (random UUIDs or cryptographic hashes).
-- The server SHOULD apply constant-time lookup for version IDs so that timing side-channels do not distinguish "not found" from "found but identical."
-- `409` responses SHOULD use generic error messages: `"Client version unrecognizable"` not `"Version not found in history after v7"`.
-- Authentication and rate limiting apply here as well.
+### e) Per-resource authorization and existence leaks
 
----
+**Description.** Batching puts resources with different access rules into one request. A server that authorizes at request level, or that returns different statuses for "forbidden" and "does not exist", leaks the namespace.
 
-### f) Replay Attack on SYNC Response
+**Mitigations**
 
-**Description:**
-If a SYNC response is incorrectly cached — either by an intermediate proxy or a misconfigured client — a stale delta may be served for a future SYNC request. The client applies an outdated delta, diverging from server state without knowing it.
+- Authorization MUST be evaluated per resource, as it would be for GET on that resource.
+- For resources the caller may not read, servers SHOULD return the same result as for a nonexistent resource (`404`).
+- Patches MUST NOT include data the caller is not authorized to read, even if the baseline would have allowed it at an earlier time (permissions can be revoked between versions).
 
-**Attack scenario:**
-```
-Round 1: Client at v1 → Server returns delta v1→v5, cached by proxy
-Round 2: Client at v5 → Proxy returns cached delta v1→v5
-Client attempts to apply v1→v5 delta when already at v5 → incorrect state
-```
+### f) Compression side channels
 
-**Mitigations:**
-- SYNC responses for mutable resources MUST include `Cache-Control: no-store` unless the resource is explicitly read-only and immutable.
-- The `Sync-Server-Version` header MUST be included in the cache key when caching is permitted.
-- Clients MUST validate that `deltas[resource].from_version` matches their current known version before applying. If it does not match, the delta MUST be discarded and a fresh SYNC request issued.
-- Proxies that do not understand SYNC SHOULD be configured to treat it as non-cacheable (same as POST).
+**Description.** The reference server and client now support gzip for large results. Compressing responses that contain secrets together with attacker-influenced text, over TLS, enables length-based attacks of the BREACH family. In SYNC, resource names from the request are echoed as keys in `results`, and snapshots can contain sensitive values.
 
----
+**Mitigations**
 
-## 3. Transport Requirements
+- Servers SHOULD NOT compress results that mix secrets with request-controlled content unless the attacker cannot cause a victim's client to send chosen SYNC requests.
+- SYNC is not a CORS-safelisted method, so browsers preflight cross-origin SYNC requests; servers SHOULD NOT list SYNC in `Access-Control-Allow-Methods` for untrusted origins. This substantially narrows the cross-origin path to this attack.
 
-- SYNC **MUST** use TLS (HTTPS) in any production deployment. The method is safe and idempotent, but the version vector reveals client state and the delta reveals server state — both require confidentiality.
-- Version tokens **SHOULD** be opaque, unguessable strings (UUIDs or cryptographic hashes). Sequential integers are convenient for development but MUST NOT be used in production.
-- Servers **SHOULD** require authentication before processing SYNC requests for non-public resources. Unauthenticated SYNC requests reveal version history to any caller.
-- The `Authorization` header (Bearer token, API key, or session cookie) applies to SYNC in the same way it applies to GET for the same resource.
+### g) Cross-origin requests
 
----
+Because SYNC is not CORS-safelisted, a cross-origin page cannot send it without a successful preflight. Servers SHOULD NOT reflect arbitrary origins in `Access-Control-Allow-Origin` for SYNC endpoints, and SHOULD require an authentication mechanism (such as a bearer token) that a cross-origin page cannot attach on its own.
 
-## 4. Comparison with Existing Method Security
+## 4. Transport Requirements
 
-**SYNC vs GET:**
+- SYNC MUST be deployed over TLS in production. Baselines reveal client state and results reveal server state.
+- Tokens MUST be opaque and unguessable in production.
+- Servers SHOULD authenticate callers for non-public resources; `Authorization` applies to SYNC as it does to GET on the same resources.
+
+## 5. Comparison with Existing Methods
 
 | Property | GET | SYNC |
 |---|---|---|
-| Reveals current resource state | Yes | Yes (via delta) |
-| Reveals version history | No | Partially (via 409 oracle) |
-| Requires state from client | No | Yes (version vector) |
-| Safe (no mutation) | Yes | Yes |
-| Cacheable | Yes | Yes, with caveats |
+| Reveals current state | Yes | Yes (as patch or snapshot) |
+| Reveals version history | No | Partially (token recognition) |
+| Requires client-supplied state | No | Yes (baselines) |
+| Safe | Yes | Yes |
+| Cost per request | One resource | Up to the resource cap |
+| Cacheable | Yes | Not specified; `no-store` recommended |
 
-The key new consideration introduced by SYNC is the **409 oracle**: GET has no equivalent. A GET to a resource either returns the resource or a 4xx/5xx. SYNC's 409 response confirms that the client's version ID is not in the server's recognized history, which is information GET never leaks. This is mitigated by opaque version tokens and rate limiting, but implementors must be explicitly aware of it.
+The new surface relative to GET is baseline probing (3c) and batching (3d, 3e). The first is shared with every resume-cursor protocol; the second is specific to multi-resource requests.
 
-SYNC's requirement that clients supply a version vector also introduces a new privacy surface: the version vector reveals which resources the client has fetched previously and approximately when. Servers MUST treat this information as sensitive and subject it to the same data handling policies as other client-provided identifiers.
+## 6. What This Analysis Does Not Cover
+
+- Interaction with Braid-style merge semantics or CRDT conflict resolution (SYNC is read-only).
+- A formal model or proof; this is a threat enumeration.
+- Denial of service at the transport layer.

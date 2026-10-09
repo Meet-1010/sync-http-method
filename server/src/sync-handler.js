@@ -1,39 +1,29 @@
 'use strict';
 
-const { getVersion, getCurrentVersion, canComputeDeltaFrom } = require('./version-store');
-const { computeDelta } = require('./delta-engine');
+const zlib = require('zlib');
+const { computeResults, MAX_RESOURCES } = require('./sync-core');
 
-// Parse raw HTTP request buffer into { method, path, headers, body }
-function parseRawHttp(buffer) {
-  const headerEnd = buffer.indexOf('\r\n\r\n');
-  if (headerEnd === -1) return null;
+const MAX_BODY_BYTES = 64 * 1024;
+const MAX_HEADER_BYTES = 16 * 1024;
 
-  const headerSection = buffer.slice(0, headerEnd).toString('utf8');
-  const bodyBuffer = buffer.slice(headerEnd + 4);
-  const lines = headerSection.split('\r\n');
-  const [method, path] = lines[0].split(' ');
+const GZIP_MIN_BYTES = 1024;
 
-  const headers = {};
-  for (let i = 1; i < lines.length; i++) {
-    const colon = lines[i].indexOf(':');
-    if (colon === -1) continue;
-    const key = lines[i].slice(0, colon).trim().toLowerCase();
-    const value = lines[i].slice(colon + 1).trim();
-    headers[key] = value;
-  }
-
-  const contentLength = parseInt(headers['content-length'] || '0', 10);
-  return { method, path, headers, bodyBuffer, contentLength };
-}
-
-function sendResponse(socket, status, statusText, extraHeaders, body) {
-  const bodyBuf = body ? Buffer.from(JSON.stringify(body)) : Buffer.alloc(0);
+function sendResponse(socket, status, statusText, extraHeaders, body, acceptEncoding) {
+  let bodyBuf = body ? Buffer.from(JSON.stringify(body)) : Buffer.alloc(0);
   const hdrs = {
-    'Content-Type': 'application/sync-delta+json',
-    'Content-Length': bodyBuf.length,
+    'Content-Type': 'application/sync-result+json',
+    'Cache-Control': 'no-store',
     'Connection': 'close',
     ...extraHeaders,
   };
+
+  if (bodyBuf.length >= GZIP_MIN_BYTES && /\bgzip\b/i.test(acceptEncoding || '')) {
+    bodyBuf = zlib.gzipSync(bodyBuf);
+    hdrs['Content-Encoding'] = 'gzip';
+    hdrs['Vary'] = 'Accept-Encoding';
+  }
+  hdrs['Content-Length'] = bodyBuf.length;
+
   let head = `HTTP/1.1 ${status} ${statusText}\r\n`;
   for (const [k, v] of Object.entries(hdrs)) head += `${k}: ${v}\r\n`;
   head += '\r\n';
@@ -43,101 +33,105 @@ function sendResponse(socket, status, statusText, extraHeaders, body) {
   socket.end();
 }
 
-function handleSyncRaw(socket, initialBuffer) {
-  let buffer = initialBuffer;
-
-  function tryProcess() {
-    const parsed = parseRawHttp(buffer);
-    if (!parsed) {
-      socket.resume();
-      socket.once('data', chunk => {
-        buffer = Buffer.concat([buffer, chunk]);
-        tryProcess();
-      });
-      return;
+// Parses an RFC 8941 List of Inner Lists of Strings:
+//   ("/users" "v42"), ("/posts")      (one item = no baseline yet)
+function parseBaselineHeader(value) {
+  const out = Object.create(null);
+  let i = 0;
+  const skipWs = () => { while (value[i] === ' ' || value[i] === '\t') i++; };
+  const readString = () => {
+    if (value[i] !== '"') return undefined;
+    i++;
+    let s = '';
+    while (i < value.length) {
+      const c = value[i++];
+      if (c === '\\') {
+        const n = value[i++];
+        if (n !== '"' && n !== '\\') return undefined;
+        s += n;
+      } else if (c === '"') {
+        return s;
+      } else {
+        s += c;
+      }
     }
-
-    const { headers, bodyBuffer, contentLength } = parsed;
-
-    if (bodyBuffer.length < contentLength) {
-      socket.resume();
-      socket.once('data', chunk => {
-        buffer = Buffer.concat([buffer, chunk]);
-        tryProcess();
-      });
-      return;
-    }
-
-    socket.resume();
-    const bodyStr = bodyBuffer.slice(0, contentLength).toString('utf8');
-    processSync(socket, bodyStr);
-  }
-
-  tryProcess();
-}
-
-function processSync(socket, bodyStr) {
-  let parsed;
-  try {
-    parsed = JSON.parse(bodyStr || '{}');
-  } catch {
-    return sendResponse(socket, 422, 'Unprocessable Entity', {}, { error: 'Malformed JSON in request body' });
-  }
-
-  const { version_vector, resources } = parsed;
-
-  if (!version_vector || typeof version_vector !== 'object' || Array.isArray(version_vector)) {
-    return sendResponse(socket, 422, 'Unprocessable Entity', {}, { error: 'Missing or invalid version_vector' });
-  }
-
-  const resourceList = Array.isArray(resources) && resources.length > 0
-    ? resources
-    : Object.keys(version_vector);
-
-  if (resourceList.length === 0) {
-    return sendResponse(socket, 204, 'No Content', { 'Sync-Server-Version': '', 'Sync-Delta-Complete': 'true' }, null);
-  }
-
-  const deltas = {};
-  let hasChanges = false;
-  let serverVersion = null;
-
-  for (const resource of resourceList) {
-    const current = getCurrentVersion(resource);
-    if (!current) {
-      return sendResponse(socket, 404, 'Not Found', {}, { error: `Resource not found: ${resource}` });
-    }
-
-    serverVersion = current.id;
-    const clientVersionId = version_vector[resource];
-
-    if (!clientVersionId) {
-      deltas[resource] = { from_version: null, to_version: current.id, operations: computeDelta({}, current.data) };
-      hasChanges = true;
-      continue;
-    }
-
-    if (!canComputeDeltaFrom(resource, clientVersionId)) {
-      return sendResponse(socket, 409, 'Conflict', {}, { error: `Client version unrecognizable for resource: ${resource}` });
-    }
-
-    const clientSnapshot = getVersion(resource, clientVersionId);
-    const ops = computeDelta(clientSnapshot.data, current.data);
-    deltas[resource] = { from_version: clientVersionId, to_version: current.id, operations: ops };
-    if (ops.length > 0) hasChanges = true;
-  }
-
-  const extraHeaders = {
-    'Sync-Server-Version': serverVersion || '',
-    'Sync-Delta-Complete': 'true',
+    return undefined;
   };
 
-  if (!hasChanges) {
-    return sendResponse(socket, 204, 'No Content', extraHeaders, null);
+  skipWs();
+  while (i < value.length) {
+    if (value[i++] !== '(') return null;
+    skipWs();
+    const key = readString();
+    if (key === undefined) return null;
+    skipWs();
+    let token = null;
+    if (value[i] === '"') {
+      token = readString();
+      if (token === undefined) return null;
+      skipWs();
+    }
+    if (value[i++] !== ')') return null;
+    out[key] = token;
+    skipWs();
+    if (i < value.length) {
+      if (value[i++] !== ',') return null;
+      skipWs();
+      if (i >= value.length) return null;
+    }
   }
-
-  const responseBody = { deltas, server_version: serverVersion, synced_at: new Date().toISOString() };
-  sendResponse(socket, 200, 'OK', extraHeaders, responseBody);
+  return Object.keys(out).length ? out : null;
 }
 
-module.exports = { processSync };
+function reject(socket, status, text, message) {
+  sendResponse(socket, status, text, {}, { error: message });
+}
+
+function processSync(socket, bodyStr, headers = {}) {
+  const headerValue = headers['sync-baseline'];
+  let baselines;
+  let accept;
+  let recover = true;
+
+  if (bodyStr && headerValue) {
+    return reject(socket, 422, 'Unprocessable Entity', 'Send baselines in the body or in Sync-Baseline, not both');
+  }
+
+  if (!bodyStr && headerValue !== undefined) {
+    baselines = parseBaselineHeader(headerValue);
+    if (!baselines) return reject(socket, 422, 'Unprocessable Entity', 'Malformed Sync-Baseline header');
+    if (headers['sync-accept']) accept = headers['sync-accept'].split(',').map(s => s.trim()).filter(Boolean);
+  } else {
+    let parsed;
+    try {
+      parsed = JSON.parse(bodyStr || '{}');
+    } catch {
+      return reject(socket, 422, 'Unprocessable Entity', 'Malformed JSON in request body');
+    }
+    baselines = parsed.baselines;
+    accept = parsed.accept;
+    if (parsed.recover !== undefined) recover = parsed.recover === true;
+
+    if (accept !== undefined && (!Array.isArray(accept) || !accept.every(a => typeof a === 'string'))) {
+      return reject(socket, 422, 'Unprocessable Entity', 'accept must be an array of media types');
+    }
+  }
+
+  if (!baselines || typeof baselines !== 'object' || Array.isArray(baselines)) {
+    return reject(socket, 422, 'Unprocessable Entity', 'Missing or invalid baselines');
+  }
+  if (!Object.values(baselines).every(t => t === null || typeof t === 'string')) {
+    return reject(socket, 422, 'Unprocessable Entity', 'Each baseline must be a string token or null');
+  }
+  if (Object.keys(baselines).length > MAX_RESOURCES) {
+    return reject(socket, 413, 'Content Too Large', `At most ${MAX_RESOURCES} resources per SYNC request`);
+  }
+
+  const { results, allUnchanged } = computeResults(baselines, { accept, recover });
+  const extraHeaders = { 'Sync-Delta-Complete': 'true' };
+
+  if (allUnchanged) return sendResponse(socket, 204, 'No Content', extraHeaders, null);
+  sendResponse(socket, 200, 'OK', extraHeaders, { results, synced_at: new Date().toISOString() }, headers['accept-encoding']);
+}
+
+module.exports = { processSync, sendResponse, parseBaselineHeader, MAX_BODY_BYTES, MAX_HEADER_BYTES };

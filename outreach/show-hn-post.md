@@ -1,39 +1,32 @@
 # Show HN Post
 
-**Title:** Show HN: SYNC – a new HTTP method for delta state sync
+**Title:** Show HN: SYNC – one HTTP request to catch up many resources, per-resource results
 
 ---
 
-Every time a client needs to update its local state from a server, it faces the same bad choices: GET the full resource again (wasteful), set up WebSockets (protocol switch, stateful, not REST-compatible), or use some proprietary delta token your API invented (not portable, not standard).
+If a client holds copies of several resources and needs to bring them current, HTTP gives you two standard options: GET everything again, or conditional GET, which returns the whole resource if any byte changed. Everything finer-grained is a custom API.
 
-HTTP has had this gap since 1.0. No standard method lets a client say: "I know my state. Send me only what changed." Here's what the three existing approaches look like on the wire versus what SYNC does:
+There is good prior work in this area, and I want to be upfront about it. Braid-HTTP lets a GET carry a `Parents` header and returns updates since that version, for one resource. Mercure and Events Query push updates over long-lived connections. JMAP has `/changes` with state tokens inside its own protocol. SYNC is a small proposal for one narrow slice: a stateless pull that names many resources in one request and returns an independent result for each.
 
 ```
-# GET + ETag — binary all-or-nothing
-Client: "Send /users if changed since ETag abc"
-Server: "Changed? Here's all 10,000 rows. Not changed? 304."
+SYNC /api HTTP/1.1
+{"baselines": {"/users": "v42", "/posts": "v18", "/config": null},
+ "accept": ["application/merge-patch+json", "application/json-patch+json"]}
 
-# RFC 3229 — server chooses the diff baseline (and nobody implemented it)
-Client: "Send me a delta if you can"
-Server: "Here's a diff from some version I picked"
-
-# SYNC — client declares exact state, server returns minimal delta
-Client: "I am at { /users: v42, /posts: v18, /config: v7 }"
-Server: "Here's exactly what changed since each of those — nothing more"
+-> /users: patch   /posts: 304   /config: snapshot   /gone: 404
 ```
 
-I built a reference implementation and wrote up a formal Internet-Draft.
+A stale token for one resource doesn't fail the others, and the server falls back to a snapshot when it is smaller than the patch.
 
-**What's in the repo:**
-- Node.js server (raw TCP `net.createServer` to bypass the llhttp method whitelist)
-- Client library with version vector tracking
-- 21 passing tests
-- Bandwidth benchmark: 96% reduction vs GET polling on a 100-item feed with 3% change rate
-- IETF Internet-Draft spec (spec/SYNC-method-draft.md)
-- Security analysis (spec/SECURITY-ANALYSIS.md)
+I measured it against full GET, conditional GET, and models of Braid-style and Mercure-style catch-up on real sockets with a simulated 40 ms RTT. The honest summary:
 
-The `net.createServer` part is the interesting implementation detail — Node's HTTP parser rejects unknown methods before they reach Express, so you have to intercept at the TCP layer, buffer the bytes, detect the method string in the first line, and route accordingly.
+- With minimal headers and no compression, SYNC, Braid over HTTP/2, and a Mercure-style replay are within a few percent of each other.
+- With realistic request headers and gzip, catching up 100 resources after one round of change took 6.7 KB with SYNC vs 36 KB for per-resource HTTP/2 requests and 90 KB over HTTP/1.1.
+- For a single resource there is no consistent advantage.
+- Over HTTP/1.1, request count dominates: ~750 ms vs ~100 ms at 100 resources.
 
-https://github.com/Meet-1010/sync-http-method
+The Braid and Mercure servers in the benchmark are my own minimal models of the drafts, not their reference implementations, so treat the comparison accordingly. The reference server (Node) uses a raw `net.createServer` because Node's HTTP parser rejects unknown methods before any middleware runs.
 
-Curious if others have hit this gap in their own work, and whether the IETF angle is worth pursuing.
+Repo with spec, security analysis, tests, and the benchmark (`npm run bench`): https://github.com/Meet-1010/sync-http-method
+
+Interested in whether it makes more sense as a new method or as a profile of QUERY, and in comparisons against the real Braid and Mercure implementations.

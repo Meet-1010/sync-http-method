@@ -4,13 +4,14 @@ Abbrev: SYNC Method
 Category: Standards Track
 Author: Meet Chauhan
 Date: October 2026
+Revision: -01
 ---
 
 # The SYNC HTTP Method
 
 ## Abstract
 
-This document defines the SYNC HTTP method. SYNC is a safe, idempotent request method that allows a client to declare its current resource state via a version vector and receive only the minimal delta required to reach the server's current state. It fills a semantic gap in HTTP where no standard method supports client-declared, resource-level delta synchronization in a single request-response cycle. This document requests registration of the SYNC method in the HTTP Method Registry maintained by IANA.
+This document defines the SYNC HTTP method. SYNC is a safe, idempotent request method with which a client declares, for one or more resources, the version it already holds (its *baselines*) and receives, in a single response, an independent per-resource result: an update from that baseline to the current state, expressed as a JSON Patch, a JSON Merge Patch, or a full snapshot. SYNC is a stateless pull: it needs no long-lived connection, and a stale or missing baseline for one resource never fails the others. It is intended as a batch catch-up primitive that composes with, rather than replaces, subscription-based approaches. This document requests registration of the SYNC method in the HTTP Method Registry maintained by IANA.
 
 ---
 
@@ -18,46 +19,48 @@ This document defines the SYNC HTTP method. SYNC is a safe, idempotent request m
 
 ### 1.1 Background and Motivation
 
-HTTP/1.1, as defined in RFC 9110, provides request methods whose semantics cover resource retrieval (GET), creation (POST), full replacement (PUT), partial modification (PATCH), and deletion (DELETE). Conditional request semantics (RFC 7232) allow a client to avoid re-fetching an unchanged resource via ETags and the `If-None-Match` request header. However, these mechanisms collectively leave an important use case unaddressed:
+HTTP provides methods for retrieval (GET), creation (POST), replacement (PUT), partial modification (PATCH), and deletion (DELETE). Conditional requests (RFC 9110, Section 13) let a client avoid re-fetching an unchanged resource via entity tags, but the outcome is binary: the full representation or `304 Not Modified`.
 
-> A client that knows its current state for one or more resources wishes to receive only the changes that have occurred since that state — not the full resource, not a binary hit/miss.
+Many applications hold local copies of several resources and periodically need to bring all of them up to date: a mobile app resuming after being offline, a dashboard, a configuration agent, a cache. Today such a client typically either re-fetches every resource in full, or issues one request per resource that carries a baseline in some mechanism particular to that API. This document calls the shared need the *catch-up problem*: given what I already hold for N resources, send me only what changed.
 
-This situation — which we call the *delta synchronization problem* — arises in essentially every application that maintains local state synchronized against a server: document editors, feed readers, mobile apps with offline support, dashboards, configuration management systems, and distributed caches.
+### 1.2 Position Relative to Existing Work
 
-Existing approaches each impose significant costs:
+This is not the first proposal in this space, and this document does not claim it is. Section 1.4 compares SYNC with the related work. In brief, SYNC occupies one narrow combination that the cited efforts treat as secondary or out of scope:
 
-**GET polling** forces the client to fetch the entire resource on every synchronization cycle, regardless of how little has changed. For a 100-item feed where 3 items change per cycle, 97% of every response is data the client already has.
+1. **Multiple resources per request**, each with its own baseline.
+2. **A stateless pull** with no long-lived connection and no server-side subscription state.
+3. **Independent per-resource outcomes**, so partial failure is routine, not exceptional.
+4. **A negotiated update format** rather than a single mandated one.
 
-**Conditional GET (ETags + `If-None-Match`)** produces a binary outcome: either the full resource is returned (200 OK) or nothing is returned (304 Not Modified). There is no middle ground in which only the changed portion is transferred.
+### 1.3 Goals
 
-**WebSockets** (RFC 6455) address the real-time push use case by establishing a persistent bidirectional connection. However, this requires a protocol upgrade, introduces stateful connection management, and is architecturally incompatible with standard HTTP caching, load balancing, and REST constraints. For applications that only need periodic synchronization, WebSockets are a significant over-fit.
+1. Let a client declare its current baseline for one or more resources in a single request.
+2. Let the server answer each resource independently with the smallest update it can produce in a format the client accepts.
+3. Be **safe** and **idempotent** (Section 3.2).
+4. Keep the version-token scheme opaque so that integer counters, hashes, or causal-history identifiers (for example Braid version IDs) can all be used.
+5. Compose with subscription mechanisms: a client can SYNC to catch up on N resources, then open streams for live updates.
 
-**Server-Sent Events (SSE)** provide server-initiated push over a long-lived HTTP connection. The client cannot declare its known state to the server; SSE is unidirectional.
+### 1.4 Non-Goals
 
-**RFC 3229 (Delta Encoding in HTTP, 2002)** introduced delta encoding as a GET extension. Under RFC 3229, the server chooses the baseline for the diff based on its own instance-manipulation history. The client cannot declare which version it currently holds. The RFC was adopted by almost no implementations and is considered abandoned.
+- Real-time server push. SYNC is client-initiated. Subscription-based mechanisms (Section 1.5) are the right tool for push.
+- Writes or conflict resolution. SYNC is read-only. Mutations continue to use PUT, POST, or PATCH; merge semantics (CRDT/OT) are out of scope.
+- A specific version scheme. Tokens are opaque; this document does not define how servers generate or order them.
 
-The SYNC method addresses all of these shortcomings with a single, well-defined semantics: the client declares its current state as a version vector, and the server responds with only the operations required to advance from each declared version to the server's current version.
+### 1.5 Related Work
 
-### 1.2 Goals
+**Braid-HTTP** (`draft-toomim-httpbis-braid-http-04`; versions in `draft-toomim-httpbis-versions-04`). A `GET` carrying a `Parents` header asks for updates since a stated version, and the draft allows JSON Patch (RFC 6902) as a patch type. This is the closest prior art to the single-resource form of SYNC. Braid additionally defines subscriptions (`Subscribe`, `209`), merge types, and version DAGs, all of which are outside SYNC's scope. Braid operates per URI; a client tracking N resources issues N requests or subscriptions. The published drafts have expired, and the latest Braid-HTTP draft (-04) has not yet filled in its Security Considerations section.
 
-The SYNC method is designed to:
+**Mercure** (`draft-dunglas-mercure-08`). A publish/subscribe hub delivering updates over Server-Sent Events, with topic matchers, OAuth-based authorization, and `Last-Event-ID` resumption. Resumption uses one hub-wide event cursor rather than a per-resource version, and the hub may discard history. Mercure is push-oriented and requires a long-lived connection.
 
-1. Allow a client to declare its exact current state for one or more resources in a single request.
-2. Allow the server to respond with the minimal delta required to bring the client to current state, using a standard delta format (JSON Patch, RFC 6902).
-3. Be **safe**: SYNC does not modify server state.
-4. Be **idempotent**: repeating the same SYNC request with the same version vector produces the same response.
-5. Be **bandwidth-efficient**: only changed data is transferred.
-6. Be **REST-compatible**: SYNC fits the standard HTTP request-response model, works with existing infrastructure (proxies, load balancers, CDNs), and coexists with other methods on the same endpoint.
-7. Be **cacheable**: SYNC responses MAY be cached with appropriate cache key construction (see Section 7).
+**Events Query** (`draft-gupta-httpapi-events-query-03`). Uses the QUERY method (RFC 10008) to return a representation and a stream of event notifications from one resource. It lists multi-resource delivery as a limitation (its Section 2.5) and places versioning and resumption out of scope (its Section 2.4.3). SYNC addresses exactly those two points for the pull case.
 
-### 1.3 Non-Goals
+**JMAP** (RFC 8620). A complete JSON application protocol whose `/changes` methods return changes since a client-supplied state string, and which batches multiple method calls in one request. SYNC differs in being a generic HTTP method over arbitrary JSON resources, not an application protocol with its own object model and endpoint.
 
-The SYNC method is not intended to:
+**WebDAV Collection Synchronization** (RFC 6578). Defines a `sync-token` for efficiently synchronizing the members of one WebDAV collection. It is specific to WebDAV collections.
 
-- Replace WebSockets for applications requiring real-time server-initiated push. SYNC is pull-based and requires the client to initiate each synchronization cycle.
-- Replace GET for applications that need the full current state of a resource. GET remains appropriate when the client has no prior state.
-- Provide bidirectional synchronization. SYNC is read-only; mutations continue to use POST, PUT, or PATCH.
-- Address binary or non-JSON resource formats. The delta format defined in this document (JSON Patch) applies to JSON resources. Extension to other delta formats is left for future work.
+**RFC 3229** (Delta encoding in HTTP). Extends GET with server-chosen baselines selected from the server's own instance history. The client cannot declare which version it holds. It saw little deployment.
+
+**QUERY** (RFC 10008). A safe, idempotent method that carries a request body. SYNC is also a safe, idempotent method with a body, and the same considerations about cache keys apply (Section 7). SYNC defines semantics for that body; QUERY defines none. An alternative design is to express SYNC as a QUERY with a defined media type (see Section 11).
 
 ---
 
@@ -65,13 +68,15 @@ The SYNC method is not intended to:
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 (RFC 2119, RFC 8174) when, and only when, they appear in all capitals, as shown here.
 
-**Version vector:** A JSON object mapping resource identifiers (URI path strings) to version tokens. Each entry asserts that the client currently holds the state of the named resource at the named version.
+**Baseline:** A version token declaring the state of one resource that the client currently holds. A baseline of `null` declares that the client holds no state for that resource.
 
-**Version token:** An opaque string assigned by the server to identify a specific historical state of a resource. Version tokens MUST be treated as opaque by clients. The server alone defines the relationship between tokens and resource states.
+**Baseline map:** A JSON object mapping resource identifiers (URI path strings) to baselines. (Revision -00 called this a "version vector". That term has a specific meaning in distributed systems, one counter per replica, which this structure is not, so it was renamed.)
 
-**Delta:** A sequence of JSON Patch operations (RFC 6902) sufficient to transform the resource state at `from_version` into the resource state at `to_version`.
+**Version token:** An opaque string assigned by the server to identify a state of a resource. Clients MUST treat tokens as opaque. The server alone defines which tokens it recognizes and how they relate to resource states.
 
-**Synchronization cycle:** A single SYNC request-response exchange in which the client declares its version vector and the server responds with deltas.
+**Update:** The information needed to move one resource from its baseline to the server's current state, in one of the formats of Section 6.
+
+**Result:** The per-resource entry in a SYNC response: a status plus, where applicable, an update.
 
 ---
 
@@ -79,34 +84,26 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 
 ### 3.1 Semantics
 
-A SYNC request asks the server to compute and return, for each resource identified in the request's version vector, the minimal set of changes (a delta) that transforms the client's declared version of that resource into the server's current version.
-
-The server MUST NOT modify any resource as a result of processing a SYNC request.
-
-The server computes deltas independently for each resource in the version vector. Resources that are already at the server's current version produce an empty operations array. If all requested resources are already at current state, the server returns `204 No Content`.
-
-The semantics are summarized as:
+A SYNC request asks the server to resolve each resource in the baseline map independently and return one result per resource. The server MUST NOT modify any resource as a result of processing a SYNC request.
 
 ```
-Client → Server:  "I hold resource R at version V. What changed?"
-Server → Client:  "Here are the operations to advance R from V to V_current."
+Client -> Server:  "I hold /a at token T1, /b at T2, and nothing for /c."
+Server -> Client:  "/a: here is a patch to current. /b: unchanged. /c: here is a snapshot."
 ```
+
+If every requested resource is unchanged, the server returns `204 No Content`.
 
 ### 3.2 Safety and Idempotency
 
-As defined in RFC 9110 Section 9.2, a method is **safe** if it does not modify server state. SYNC is safe: it is a read-only method. Implementations MUST NOT use SYNC to trigger server-side mutations.
-
-As defined in RFC 9110 Section 9.2, a method is **idempotent** if multiple identical requests have the same effect as a single request. SYNC is idempotent: issuing the same SYNC request (same version vector, same resource list) multiple times against an unchanged server MUST produce the same response.
-
-These properties mean that SYNC requests MAY be automatically retried by clients or intermediaries on transient failure without risk of duplicate side effects.
+SYNC is **safe** (RFC 9110, Section 9.2.1): it is a read-only method, and implementations MUST NOT use it to trigger mutations. SYNC is **idempotent** (RFC 9110, Section 9.2.2): repeating the same request against an unchanged server produces the same response. Clients and intermediaries MAY therefore retry SYNC automatically.
 
 ### 3.3 Relationship to Existing Methods
 
-**Relationship to GET:** GET retrieves the current full state of a resource. SYNC retrieves the delta from a client-declared prior state to the current state. The two methods are complementary: GET is appropriate for initial fetch; SYNC is appropriate for subsequent synchronization.
+**GET** retrieves current state; SYNC retrieves the change from a declared prior state, for several resources at once. They are complementary: GET for first fetch, SYNC afterward.
 
-**Relationship to PATCH:** PATCH applies client-specified changes to a resource (client-to-server direction). SYNC retrieves server-computed changes for the client to apply locally (server-to-client direction). The two methods are directional inverses of each other with respect to where mutations originate.
+**PATCH** carries client-originated changes to the server; SYNC returns server-originated changes to the client. SYNC returns patches in the same formats PATCH accepts (RFC 6902, RFC 7396) but is not itself a mutation.
 
-**Relationship to RFC 3229:** RFC 3229 defines delta encoding for GET responses. Under RFC 3229, the server selects the baseline for the diff using its own instance manipulation history; the client cannot specify which version it holds. SYNC differs fundamentally: the client declares its exact version state, and the server computes a diff specifically from that declared version.
+**Subscriptions** (Braid `Subscribe`, Mercure, Events Query) deliver future changes over a held connection. SYNC delivers accumulated past changes in one exchange. A client MAY SYNC to catch up and then subscribe; this document does not define the subscription.
 
 ---
 
@@ -114,188 +111,181 @@ These properties mean that SYNC requests MAY be automatically retried by clients
 
 ### 4.1 Request Headers
 
-A SYNC request SHOULD include the following headers:
+- `Content-Type: application/sync-baseline+json` when a body is present.
+- `Accept: application/sync-result+json`.
+- `Content-Length`, per RFC 9110.
 
-- `Content-Type: application/sync-vector+json` — indicates that the request body is a version vector document.
-- `Accept: application/sync-delta+json` — indicates that the client expects a delta response.
-- `Content-Length` — MUST be included when the request body is present, per RFC 9110.
-
-### 4.2 Version Vector Schema
-
-The request body MUST be a JSON object with the following structure:
+### 4.2 Request Body
 
 ```json
 {
-  "version_vector": {
-    "<resource-path>": "<version-token>",
-    "<resource-path>": "<version-token>"
+  "baselines": {
+    "/users":  "a4f2c1d9",
+    "/posts":  "7b1e2f3a",
+    "/config": null
   },
-  "resources": ["<resource-path>", ...],
-  "options": {
-    "max_delta_size": <integer>,
-    "compression": "<algorithm>"
-  }
+  "accept": ["application/merge-patch+json", "application/json-patch+json"],
+  "recover": true
 }
 ```
 
-Fields:
+- `baselines` (REQUIRED): object mapping resource paths to a token string or `null`. The set of resources to synchronize is exactly the set of keys.
+- `accept` (OPTIONAL): array of media types in decreasing preference, drawn from Section 6. Default: `["application/json-patch+json"]`. Unknown media types MUST be ignored. A server MAY always answer with a snapshot (`application/json`) regardless of `accept` (Section 6.4).
+- `recover` (OPTIONAL, default `true`): controls the response to an unrecognized baseline (Section 5.2).
 
-- `version_vector` (REQUIRED): A JSON object mapping resource path strings to version tokens. Each entry declares the client's current known version for that resource.
-- `resources` (OPTIONAL): An explicit list of resource paths to synchronize. If omitted, all keys in `version_vector` are synchronized. An empty array requests synchronization of zero resources; the server MUST respond with `204 No Content`.
-- `options` (OPTIONAL): Client preferences for the response.
-  - `max_delta_size`: Maximum acceptable response body size in bytes. The server SHOULD respect this limit by returning `413 Content Too Large` if the computed delta would exceed it.
-  - `compression`: Preferred delta compression algorithm (e.g., `"gzip"`).
+### 4.3 Header Form
 
-Example request:
+For small requests, the baseline map MAY be carried instead in a `Sync-Baseline` request header whose value is an RFC 8941 List of Inner Lists of Strings. Each inner list is `(resource token)`, or `(resource)` for no baseline:
 
-```http
-SYNC /api/data HTTP/1.1
-Host: example.com
-Content-Type: application/sync-vector+json
-Accept: application/sync-delta+json
-Content-Length: 112
-
-{
-  "version_vector": {
-    "/users": "a4f2c1d9-8e3b-4a1f-b7c2-3d9e0f1a2b3c",
-    "/posts": "7b1e2f3a-4c5d-6e7f-8a9b-0c1d2e3f4a5b",
-    "/config": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
-  },
-  "resources": ["/users", "/posts", "/config"]
-}
+```
+Sync-Baseline: ("/users" "a4f2c1d9"), ("/posts" "7b1e2f3a"), ("/config")
+Sync-Accept: application/merge-patch+json, application/json-patch+json
 ```
 
-### 4.3 Resource List
+A Dictionary cannot be used because Dictionary keys cannot contain `/`. A request MUST NOT carry baselines in both the header and the body; the server MUST answer `422`. Because many implementations limit header size, the body form is RECOMMENDED when more than a handful of resources are listed.
 
-The `resources` array specifies which resources to include in this synchronization cycle. A server MAY support SYNC for a subset of its resources; requests for unsupported resources SHOULD return `501 Not Implemented` for that specific resource, or the server MAY return `501` for the entire request.
+### 4.4 Limits
 
-Servers MUST enforce a maximum number of resources per SYNC request. The RECOMMENDED default limit is 100. Requests exceeding this limit SHOULD receive `413 Content Too Large`.
+Servers MUST bound the cost of a SYNC request:
 
----
-
-## 5. Response Codes
-
-### 200 OK
-
-The server successfully computed deltas for one or more resources in the version vector. At least one resource has changes relative to the client's declared version. The response body is a delta document (see Section 6).
-
-### 204 No Content
-
-The client's declared version vector is already at the server's current state for all requested resources. No delta is needed. The response body MUST be empty. The server SHOULD include the `Sync-Server-Version` header indicating the current server version.
-
-### 409 Conflict
-
-The server cannot compute a delta from the client's declared version for at least one requested resource. This occurs when the version token is not recognized in the server's history (e.g., the version is older than the server's retention window, or the token is malformed). The client MUST perform a full re-fetch using GET for the affected resources and reset its version vector accordingly.
-
-The `409` response body SHOULD identify which resource(s) caused the conflict.
-
-### 413 Content Too Large
-
-The request body (version vector) exceeds the server's configured size limit, or the computed delta would exceed the `max_delta_size` option specified by the client.
-
-### 422 Unprocessable Entity
-
-The request body is syntactically valid JSON but semantically invalid — for example, the `version_vector` field is missing, null, or not a JSON object.
-
-### 501 Not Implemented
-
-The server does not support SYNC for the requested resource(s). Clients receiving `501` SHOULD fall back to GET for the affected resources.
+- At most a configured number of resources per request; the RECOMMENDED default is 100. Excess: `413 Content Too Large`.
+- A maximum body size; the RECOMMENDED default is 64 KiB. Excess: `413`, ideally without reading the whole body.
+- A maximum header section size. Excess: `431 Request Header Fields Too Large`.
 
 ---
 
-## 6. Delta Format
+## 5. Response Format
 
-### 6.1 JSON Patch (RFC 6902) as Delta Encoding
+### 5.1 Status Codes
 
-SYNC uses JSON Patch (RFC 6902) as its delta encoding format. Each delta in the response body is an array of JSON Patch operations describing how to transform the resource state at `from_version` into the resource state at `to_version`.
+**200 OK.** At least one resource has a result other than `304`. The body is a result document (Section 5.3). `200` is used even when some or all results are errors, because success of the exchange is distinct from success per resource.
 
-Supported operation types:
-- `add` — a new value appeared at `path`
-- `remove` — the value at `path` was deleted
-- `replace` — the value at `path` changed
-- `move` — the value at `from` was relocated to `path`
-- `copy` — the value at `from` was copied to `path`
+**204 No Content.** Every requested resource is unchanged. The body MUST be empty.
 
-JSON Pointer notation (RFC 6901) is used for `path` and `from` fields. The `/` character in path segments is escaped as `~1`; the `~` character is escaped as `~0`.
+**413 Content Too Large**, **431 Request Header Fields Too Large.** Limits of Section 4.4.
 
-### 6.2 Response Body Structure
+**422 Unprocessable Content.** The request is malformed: invalid JSON, missing or non-object `baselines`, a token that is neither string nor `null`, a malformed `Sync-Baseline` header, or baselines in both header and body.
+
+**501 Not Implemented.** The server does not support SYNC at the target.
+
+### 5.2 Per-Resource Status
+
+Each result carries its own `status`, modelled on HTTP status codes:
+
+| status | Meaning |
+|---|---|
+| 200 | An update is present: `format`, `from`, `to`, `data`. |
+| 304 | The baseline is the current version. Only `to` is present. |
+| 404 | The resource does not exist. |
+| 409 | The baseline is not recognized and the request set `recover` to `false`. |
+
+When a baseline is not recognized (for example because it is older than the server's retention window) and `recover` is `true`, the server SHOULD return status `200` with `format: "application/json"`, `from: null`, and `data` holding the full current representation. It MAY add `"baseline": "unrecognized"` so the client knows it was reset. A server that does not wish to reveal whether a token is recognized (Section 8.3) SHOULD omit that member. This recovers in the same round trip, whereas a bare `409` would force the client to issue a separate GET.
+
+A failure for one resource MUST NOT prevent results for other resources.
+
+### 5.3 Result Document
 
 ```json
 {
-  "deltas": {
-    "<resource-path>": {
-      "from_version": "<client-declared-token>",
-      "to_version": "<server-current-token>",
-      "operations": [
-        { "op": "add", "path": "/<key>", "value": { ... } },
-        { "op": "replace", "path": "/<key>/<field>", "value": "..." },
-        { "op": "remove", "path": "/<key>" }
-      ]
-    }
+  "results": {
+    "/users": {
+      "status": 200,
+      "format": "application/merge-patch+json",
+      "from": "a4f2c1d9",
+      "to": "c93b7e10",
+      "data": { "/users/1": { "email": "new@example.com" } }
+    },
+    "/posts":  { "status": 304, "to": "7b1e2f3a" },
+    "/config": { "status": 200, "format": "application/json", "from": null, "to": "5d0e1b22", "data": { "timeout": 30 } },
+    "/gone":   { "status": 404 }
   },
-  "server_version": "<global-server-version>",
-  "synced_at": "<ISO 8601 timestamp>"
+  "synced_at": "2026-10-09T10:00:00Z"
 }
 ```
 
-Resources with no changes since the client's declared version MUST still appear in the `deltas` map, with an empty `operations` array and `from_version` equal to `to_version`.
+- `from` is the baseline the update starts from (`null` for a snapshot).
+- `to` is the token the client holds after applying the update.
+- `data` is the patch or snapshot, as indicated by `format`.
 
-### 6.3 Response Headers
+### 5.4 Response Headers
 
-- `Content-Type: application/sync-delta+json` — MUST be present on all `200 OK` responses.
-- `Sync-Server-Version` — SHOULD be present on all responses (including `204`). Contains the server's current global version token. Clients MAY use this value for logging or display purposes.
-- `Sync-Delta-Complete` — MUST be present on `200 OK` responses. Value is `"true"` if the response contains the complete delta; `"false"` if the server truncated the delta due to size limits, indicating that the client should issue another SYNC request after applying the partial delta.
+- `Content-Type: application/sync-result+json` on `200`.
+- `Cache-Control: no-store` (see Section 7).
+- `Sync-Delta-Complete: true|false`. `false` means the server omitted some requested resources from `results` (for example to bound work per request); the client MUST re-request the omitted resources. Omitted resources are those present in the request but absent from `results`.
 
-### 6.4 Applying Deltas Client-Side
+There is deliberately no single "server version" header. Revision -00 defined one, but a single value is not well defined across several independently versioned resources.
 
-Clients MUST apply operations from each delta in array order. Before applying a delta, the client MUST verify that `from_version` in the response matches its current known version for that resource. If it does not match, the client MUST discard the delta and issue a fresh SYNC request.
+---
 
-If `Sync-Delta-Complete` is `"false"`, the client MUST apply the partial delta and immediately issue another SYNC request with the updated version vector (using the `to_version` values from this response). This continues until `Sync-Delta-Complete` is `"true"` or a `204` is received.
+## 6. Update Formats
+
+### 6.1 JSON Patch (`application/json-patch+json`)
+
+An RFC 6902 array. JSON Pointer (RFC 6901) paths escape `/` as `~1` and `~` as `~0`. Operations MUST be applied in array order.
+
+### 6.2 JSON Merge Patch (`application/merge-patch+json`)
+
+An RFC 7396 document. Merge Patch cannot represent a `null` object member (null means delete) and replaces arrays wholesale. When a change cannot be expressed as a merge patch, the server MUST NOT use that format for the resource; it MUST proceed to the client's next preferred format.
+
+### 6.3 Snapshot (`application/json`)
+
+The full current representation, replacing the client's copy.
+
+### 6.4 Format Selection
+
+For each resource the server walks the client's `accept` list in order and picks the first format in which it can express the change. It SHOULD send a snapshot instead if the chosen update is not smaller than the snapshot. A server MAY always send a snapshot. A client MUST therefore be prepared to receive a snapshot for any resource.
+
+Other formats (for example binary diffs, or Braid-style range patches) may be registered later; unknown formats in `accept` are ignored.
+
+### 6.5 Applying Updates Client-Side
+
+Before applying a patch, the client MUST check that the result's `from` equals the baseline it holds for that resource. If not, it MUST discard the result and issue a fresh request. Applying a patch to a different state than it was computed against can silently corrupt local state. If applying any operation fails, the client MUST leave its state unchanged.
 
 ---
 
 ## 7. Caching Considerations
 
-SYNC responses MAY be cached by shared caches and stored by clients. However, caching requires careful cache key construction:
-
-- The `Sync-Server-Version` response header MUST be included in the cache key, in addition to the request URI.
-- The version vector in the request body is part of the cache key. Implementations that cache SYNC responses MUST include a hash of the request body in the cache key.
-- For resources that change frequently, `Cache-Control: no-store` SHOULD be used to prevent stale deltas from being served.
-- SYNC responses MUST NOT be served from cache unless the `Sync-Server-Version` in the cached response matches the server's current version for the requested resources.
+SYNC responses reveal per-client state transitions and are only meaningful relative to the request body. Servers SHOULD send `Cache-Control: no-store` and, in this revision, caching of SYNC responses is not specified. A future revision could allow caching using the approach of RFC 10008, where the cache key includes the normalized request content.
 
 ---
 
 ## 8. Security Considerations
 
+A fuller analysis, including attack scenarios, is in the companion document (`SECURITY-ANALYSIS.md`).
+
 ### 8.1 Transport Security
 
-SYNC MUST be deployed over TLS (HTTPS) in any production environment. The version vector exposes client state; the delta response exposes server change history. Both require confidentiality protection.
+SYNC MUST be deployed over TLS. The baselines reveal what the client holds; the results reveal server state.
 
-### 8.2 Version Rollback
+### 8.2 Rollback and Replay
 
-Clients MUST validate that `to_version` in a response represents a version at least as recent as their current known version before applying the delta. Servers SHOULD use monotonically advancing version tokens to facilitate this check.
+A replayed or cached response can carry a patch computed from an older baseline. Clients MUST apply the check in Section 6.5. Servers SHOULD send `Cache-Control: no-store`.
 
-### 8.3 Version Vector Enumeration and 409 Oracle
+### 8.3 Baseline Probing
 
-The `409 Conflict` response confirms that a given version token is not in the server's recognized history. Servers MUST use opaque, non-guessable version tokens (e.g., UUIDs or cryptographic hashes) to prevent enumeration of server version history via probing attacks. Servers SHOULD apply rate limiting to SYNC requests per authenticated identity.
+Any protocol in which a client presents a resume cursor lets a prober distinguish recognized from unrecognized cursors. In SYNC the distinction is visible as patch-versus-snapshot (and as `409` when `recover` is `false`). Mercure documents a related leak, in which an event cursor lets a subscriber infer the existence and approximate timing of events it cannot read. Mitigations: tokens MUST be opaque and unguessable (random identifiers or keyed hashes, not sequential integers); servers SHOULD rate-limit per authenticated identity; and servers that must not reveal token validity SHOULD NOT include the `baseline` member of Section 5.2 and MAY choose a snapshot for every resource, at a bandwidth cost.
 
 ### 8.4 Amplification
 
-A single SYNC request with a large version vector may trigger expensive server-side delta computation for many resources. Servers MUST enforce a maximum version vector size and respond with `413 Content Too Large` for oversized requests. Servers SHOULD impose per-client rate limits and bound the time allocated to delta computation per request.
+A request naming many resources multiplies server work. Servers MUST enforce the limits of Section 4.4, SHOULD bound per-request computation time, and MAY use `Sync-Delta-Complete: false` to defer remaining resources.
 
-### 8.5 Delta Integrity
+### 8.5 Authorization
 
-Without TLS, a MITM can modify delta operations in transit. When TLS is in use, the TLS record layer provides integrity. For defense-in-depth on sensitive resources, servers MAY include an HMAC signature over the delta payload in a `Sync-Delta-Signature` response header.
+Authorization applies per resource. A result of `404` MAY be used to avoid revealing whether an unauthorized resource exists. Servers MUST NOT disclose, through a patch, data the client is not authorized to read.
 
-A complete treatment of SYNC security considerations, including the 409 oracle attack, replay attacks on cached responses, and version rollback, is provided in the companion security analysis document.
+### 8.6 Compression and Cross-Origin Use
+
+Result documents echo resource names from the request and may contain sensitive values. Response compression over TLS can enable length-based attacks (BREACH family) when an attacker can cause a victim's client to send chosen requests. Because SYNC is not a CORS-safelisted method, browsers preflight cross-origin SYNC requests; servers SHOULD NOT permit SYNC from untrusted origins.
+
+### 8.7 Delta Integrity
+
+Without TLS, an on-path attacker can alter a patch. Under TLS, record-layer integrity applies. For defense in depth, servers MAY sign result documents (for example in a `Sync-Result-Signature` header; its definition is out of scope here).
 
 ---
 
 ## 9. IANA Considerations
 
 ### 9.1 HTTP Method Registration
-
-This document requests that IANA register the following entry in the "Hypertext Transfer Protocol (HTTP) Method Registry" at <https://www.iana.org/assignments/http-methods>:
 
 | Field | Value |
 |---|---|
@@ -304,12 +294,16 @@ This document requests that IANA register the following entry in the "Hypertext 
 | Idempotent | Yes |
 | Reference | This document |
 
-### 9.2 Media Type Registrations
+### 9.2 Media Types
 
-This document requests registration of the following media types:
+- `application/sync-baseline+json`: request body (Section 4.2).
+- `application/sync-result+json`: response body (Section 5.3).
 
-- `application/sync-vector+json` — the content type of SYNC request bodies (version vector documents).
-- `application/sync-delta+json` — the content type of SYNC response bodies (delta documents).
+### 9.3 HTTP Field Names
+
+- `Sync-Baseline` (request; Section 4.3)
+- `Sync-Accept` (request; Section 4.3)
+- `Sync-Delta-Complete` (response; Section 5.4)
 
 ---
 
@@ -317,17 +311,47 @@ This document requests registration of the following media types:
 
 ### 10.1 Normative References
 
-- **RFC 2119** — Bradner, S., "Key words for use in RFCs to Indicate Requirement Levels", BCP 14, RFC 2119, March 1997.
-- **RFC 8174** — Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words", BCP 14, RFC 8174, May 2017.
-- **RFC 9110** — Fielding, R., et al., "HTTP Semantics", RFC 9110, June 2022.
-- **RFC 9112** — Fielding, R., et al., "HTTP/1.1", RFC 9112, June 2022.
-- **RFC 6902** — Bryan, P. and M. Nottingham, "JavaScript Object Notation (JSON) Patch", RFC 6902, April 2013.
-- **RFC 6901** — Bryan, P., et al., "JavaScript Object Notation (JSON) Pointer", RFC 6901, April 2013.
-- **RFC 7232** — Fielding, R. and J. Reschke, "Hypertext Transfer Protocol (HTTP/1.1): Conditional Requests", RFC 7232, June 2014.
+- **RFC 2119**, **RFC 8174**: BCP 14 key words.
+- **RFC 9110**: Fielding, R., Nottingham, M., Reschke, J., "HTTP Semantics", June 2022.
+- **RFC 9112**: Fielding, R., Nottingham, M., Reschke, J., "HTTP/1.1", June 2022.
+- **RFC 6901**: Bryan, P., Zyp, K., Nottingham, M., "JavaScript Object Notation (JSON) Pointer", April 2013.
+- **RFC 6902**: Bryan, P., Nottingham, M., "JavaScript Object Notation (JSON) Patch", April 2013.
+- **RFC 7396**: Hoffman, P., Snell, J., "JSON Merge Patch", October 2014.
+- **RFC 8941**: Nottingham, M., Kamp, P-H., "Structured Field Values for HTTP", February 2021.
 
 ### 10.2 Informative References
 
-- **RFC 3229** — Mogul, J., et al., "Delta encoding in HTTP", RFC 3229, January 2002.
-- **RFC 6455** — Fette, I. and A. Melnikov, "The WebSocket Protocol", RFC 6455, December 2011.
-- **draft-ietf-httpbis-safe-method-w-body** — Snell, J., "HTTP QUERY Method", Internet-Draft, 2021.
-- **RFC 4918** — Dusseault, L., "HTTP Extensions for Web Distributed Authoring and Versioning (WebDAV)", RFC 4918, June 2007.
+- **RFC 10008**: Reschke, J., Snell, J., Bishop, M., "The HTTP QUERY Method".
+- **RFC 8620**: Jenkins, N., Newman, C., "The JSON Meta Application Protocol (JMAP)", July 2019.
+- **RFC 6578**: Daboo, C., Quillaud, A., "Collection Synchronization for Web Distributed Authoring and Versioning (WebDAV)", March 2012.
+- **RFC 3229**: Mogul, J., et al., "Delta encoding in HTTP", January 2002.
+- **RFC 6455**: Fette, I., Melnikov, A., "The WebSocket Protocol", December 2011.
+- **draft-toomim-httpbis-braid-http-04**: Toomim, M., et al., "Braid-HTTP: Synchronization for HTTP" (expired).
+- **draft-toomim-httpbis-versions-04**: Toomim, M., "HTTP Resource Versioning" (expired).
+- **draft-dunglas-mercure-08**: Dunglas, K., "The Mercure Protocol".
+- **draft-gupta-httpapi-events-query-03**: Gupta, R., "HTTP Events Query".
+
+---
+
+## 11. Open Questions
+
+1. **New method or QUERY profile?** Since RFC 10008, SYNC could be defined as a QUERY with `application/sync-baseline+json`, avoiding a new method registration. The cost is that QUERY semantics for intermediaries are generic; the benefit is deployability on infrastructure that already tolerates QUERY.
+2. **Alignment with Braid version tokens.** Tokens are opaque so a Braid version-ID set can be carried as a string. Should the draft define a recommended encoding for sets of IDs?
+3. **Caching.** Can SYNC responses be made safely cacheable, and is that valuable?
+4. **Truncation.** `Sync-Delta-Complete: false` is specified minimally. Is omission of resources sufficient, or is a continuation cursor needed?
+5. **HTTP/2 and HTTP/3.** With multiplexing, N parallel GETs cost less than under HTTP/1.1. The remaining advantage of a batch is measured in the accompanying benchmark.
+6. **Binary and non-JSON resources.** Which update formats should be registered?
+
+---
+
+## Appendix A. Changes from -00
+
+- "Version vector" renamed "baseline map"; request field `baselines` replaces `version_vector`; `resources` removed (the keys are the resource list).
+- Per-resource results with their own status replace whole-request `404`/`409`.
+- Unrecognized baselines recover with a snapshot by default.
+- Update format is negotiated (`accept`); JSON Merge Patch and snapshot added to JSON Patch; snapshot fallback when smaller.
+- `Sync-Baseline` header form added.
+- Media types renamed: `application/sync-baseline+json`, `application/sync-result+json`.
+- `Sync-Server-Version`, `options.max_delta_size`, and `options.compression` removed.
+- Limits (resource count, body size, header size) and `Cache-Control: no-store` are now implemented by the reference server.
+- Related work and positioning added (Section 1.5).

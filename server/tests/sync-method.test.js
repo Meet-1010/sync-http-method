@@ -1,67 +1,68 @@
 'use strict';
 
 const http = require('http');
-const jsonpatch = require('fast-json-patch');
+const zlib = require('zlib');
 const { startServer, stopServer } = require('../src/index');
+const { addVersion, getVersion, getCurrentVersion } = require('../src/version-store');
+const { applyResult, JSON_PATCH, MERGE_PATCH, SNAPSHOT } = require('../../client/src/apply');
 
 const PORT = 3001;
 
-beforeAll(done => { startServer(PORT, done); });
+beforeAll(done => {
+  addVersion('/tiny', 'v1', { a: 1 });
+  addVersion('/tiny', 'v2', { a: 2 });
+  addVersion('/nulls', 'v1', { a: { b: 1, c: 'x'.repeat(200) } });
+  addVersion('/nulls', 'v2', { a: { b: null, c: 'x'.repeat(200) } });
+  addVersion('/doc', 'v1', { title: 'T', body: 'y'.repeat(300), tags: ['a'] });
+  addVersion('/doc', 'v2', { title: 'T2', body: 'y'.repeat(300), tags: ['a'], extra: { k: 1 } });
+  const big = {};
+  for (let i = 0; i < 200; i++) big[i] = { id: i, text: `item ${i} `.repeat(5) };
+  addVersion('/big', 'v1', big);
+  startServer(PORT, done);
+});
 afterAll(done => { stopServer(done); });
 
-function makeSyncRequest(path, body) {
+function rawSync({ body, headers = {} }) {
   return new Promise((resolve, reject) => {
-    const bodyStr = JSON.stringify(body);
-    const options = {
-      hostname: 'localhost',
-      port: PORT,
-      path,
-      method: 'SYNC',
-      agent: false,
-      headers: {
-        'Content-Type': 'application/sync-vector+json',
-        'Accept': 'application/sync-delta+json',
-        'Content-Length': Buffer.byteLength(bodyStr),
-      },
-    };
-    const req = http.request(options, res => {
-      let data = '';
-      res.on('data', c => { data += c; });
+    const hdrs = { 'Accept': 'application/sync-result+json', ...headers };
+    if (body !== undefined) {
+      hdrs['Content-Type'] = 'application/sync-baseline+json';
+      hdrs['Content-Length'] = Buffer.byteLength(body);
+    }
+    const req = http.request({ hostname: 'localhost', port: PORT, path: '/api/users', method: 'SYNC', agent: false, headers: hdrs }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
       res.on('end', () => {
+        let raw = Buffer.concat(chunks);
+        const encoded = res.headers['content-encoding'];
+        if (encoded === 'gzip') raw = zlib.gunzipSync(raw);
+        const data = raw.toString('utf8');
         let parsed = null;
         try { parsed = data ? JSON.parse(data) : null; } catch {}
-        resolve({ status: res.statusCode, headers: res.headers, body: parsed, raw: data });
+        resolve({ status: res.statusCode, headers: res.headers, body: parsed });
       });
     });
     req.on('error', reject);
-    req.write(bodyStr);
+    if (body !== undefined) req.write(body);
     req.end();
   });
 }
 
-function makeGetRequest(path) {
-  return new Promise((resolve, reject) => {
-    http.get({ hostname: 'localhost', port: PORT, path }, res => {
-      let data = '';
-      res.on('data', c => { data += c; });
-      res.on('end', () => resolve({ status: res.statusCode, body: data ? JSON.parse(data) : null }));
-    }).on('error', reject);
-  });
-}
+const sync = (payload, headers) => rawSync({ body: JSON.stringify(payload), headers });
 
-function makePostRequest(path, body) {
+function plain(method, path, payload) {
   return new Promise((resolve, reject) => {
-    const bodyStr = JSON.stringify(body);
+    const body = payload ? JSON.stringify(payload) : null;
     const req = http.request({
-      hostname: 'localhost', port: PORT, path, method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr) },
+      hostname: 'localhost', port: PORT, path, method,
+      headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {},
     }, res => {
       let data = '';
       res.on('data', c => { data += c; });
-      res.on('end', () => resolve({ status: res.statusCode }));
+      res.on('end', () => resolve({ status: res.statusCode, body: data ? JSON.parse(data) : null }));
     });
     req.on('error', reject);
-    req.write(bodyStr);
+    if (body) req.write(body);
     req.end();
   });
 }
@@ -70,214 +71,268 @@ function makePostRequest(path, body) {
 
 describe('Basic', () => {
   test('Server accepts SYNC method without 405', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v1' },
-      resources: ['/users'],
-    });
+    const res = await sync({ baselines: { '/users': 'v1' } });
     expect([200, 204]).toContain(res.status);
   });
 
-  test('Returns 200 with delta when client is behind', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v1' },
-      resources: ['/users'],
-    });
+  test('Returns 200 with per-resource results when client is behind', async () => {
+    const res = await sync({ baselines: { '/users': 'v1' } });
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('deltas');
+    expect(res.body.results['/users']).toMatchObject({ status: 200, from: 'v1', to: 'v3' });
   });
 
-  test('Returns 204 when client is already up to date', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v3' },
-      resources: ['/users'],
-    });
+  test('Returns 204 when every resource is at its current version', async () => {
+    const res = await sync({ baselines: { '/users': 'v3', '/posts': 'v2' } });
     expect(res.status).toBe(204);
   });
 
-  test('Returns 409 when client version is unrecognizable', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v999' },
-      resources: ['/users'],
-    });
-    expect(res.status).toBe(409);
+  test('Unchanged resources report 304 inside a mixed response', async () => {
+    const res = await sync({ baselines: { '/users': 'v3', '/posts': 'v1' } });
+    expect(res.status).toBe(200);
+    expect(res.body.results['/users']).toEqual({ status: 304, to: 'v3' });
+    expect(res.body.results['/posts'].status).toBe(200);
   });
 });
 
-// ─── Request Validation ───────────────────────────────────────────────────────
+// ─── Per-resource failure isolation ──────────────────────────────────────────
 
-describe('Request Validation', () => {
-  test('Returns 422 when version_vector is missing', async () => {
-    const res = await makeSyncRequest('/api/users', { resources: ['/users'] });
+describe('Per-resource failure isolation', () => {
+  test('Unrecognized baseline recovers with a snapshot while other resources still get deltas', async () => {
+    const res = await sync({ baselines: { '/users': 'v999', '/posts': 'v1' } });
+    expect(res.status).toBe(200);
+    expect(res.body.results['/users']).toMatchObject({
+      status: 200, format: SNAPSHOT, from: null, to: 'v3', baseline: 'unrecognized',
+    });
+    expect(res.body.results['/users'].data).toEqual(getCurrentVersion('/users').data);
+    expect(res.body.results['/posts']).toMatchObject({ status: 200, from: 'v1', to: 'v2' });
+  });
+
+  test('recover:false reports 409 for only the stale resource', async () => {
+    const res = await sync({ baselines: { '/users': 'v999', '/posts': 'v1' }, recover: false });
+    expect(res.status).toBe(200);
+    expect(res.body.results['/users']).toEqual({ status: 409 });
+    expect(res.body.results['/posts'].status).toBe(200);
+  });
+
+  test('Missing resource reports 404 for only that resource', async () => {
+    const res = await sync({ baselines: { '/nonexistent': 'v1', '/posts': 'v1' } });
+    expect(res.status).toBe(200);
+    expect(res.body.results['/nonexistent']).toEqual({ status: 404 });
+    expect(res.body.results['/posts'].status).toBe(200);
+  });
+
+  test('A lone missing resource is still reported, not swallowed as 204', async () => {
+    const res = await sync({ baselines: { '/nonexistent': 'v1' } });
+    expect(res.status).toBe(200);
+    expect(res.body.results['/nonexistent']).toEqual({ status: 404 });
+  });
+
+  test('A resource named __proto__ is an ordinary key and pollutes nothing', async () => {
+    const res = await rawSync({ body: '{"baselines":{"__proto__":"v1","/posts":"v1"}}' });
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body.results)).toContain('__proto__');
+    expect({}.status).toBeUndefined();
+  });
+});
+
+// ─── Request validation ──────────────────────────────────────────────────────
+
+describe('Request validation', () => {
+  test('422 when baselines is missing', async () => {
+    expect((await sync({ resources: ['/users'] })).status).toBe(422);
+  });
+
+  test('422 on malformed JSON', async () => {
+    expect((await rawSync({ body: '{ not json }' })).status).toBe(422);
+  });
+
+  test('422 when a token is not a string or null', async () => {
+    expect((await sync({ baselines: { '/users': 3 } })).status).toBe(422);
+  });
+
+  test('422 when accept is not an array of strings', async () => {
+    expect((await sync({ baselines: { '/users': 'v1' }, accept: 'application/json' })).status).toBe(422);
+  });
+
+  test('422 when baselines are sent in both header and body', async () => {
+    const res = await sync({ baselines: { '/users': 'v1' } }, { 'Sync-Baseline': '("/users" "v1")' });
     expect(res.status).toBe(422);
   });
 
-  test('Returns 422 when version_vector is malformed JSON', async () => {
-    return new Promise((resolve, reject) => {
-      const bodyStr = '{ not json }';
-      const options = {
-        hostname: 'localhost', port: PORT, path: '/api/users', method: 'SYNC',
-        agent: false,
-        headers: { 'Content-Type': 'application/sync-vector+json', 'Content-Length': Buffer.byteLength(bodyStr) },
-      };
-      const req = http.request(options, res => {
-        let data = '';
-        res.on('data', c => { data += c; });
-        res.on('end', () => {
-          expect(res.statusCode).toBe(422);
-          resolve();
-        });
-      });
-      req.on('error', reject);
-      req.write(bodyStr);
-      req.end();
-    });
-  });
-
-  test('Handles empty version_vector gracefully', async () => {
-    const res = await makeSyncRequest('/api/users', { version_vector: {} });
-    expect(res.status).toBe(204);
+  test('Empty baselines returns 204', async () => {
+    expect((await sync({ baselines: {} })).status).toBe(204);
   });
 });
 
-// ─── Delta Correctness ────────────────────────────────────────────────────────
+// ─── Limits (SECURITY-ANALYSIS: amplification) ───────────────────────────────
 
-describe('Delta Correctness', () => {
-  test('Delta contains only changed fields, not unchanged ones', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v2' },
-      resources: ['/users'],
-    });
-    expect(res.status).toBe(200);
-    const ops = res.body.deltas['/users'].operations;
-    // v2→v3: only alice's email changed (JSON Pointer escapes / as ~1)
-    const paths = ops.map(o => o.path);
-    expect(paths.some(p => p.includes('email'))).toBe(true);
-    expect(paths.every(p => !p.includes('~1users~12'))).toBe(true);
+describe('Limits', () => {
+  test('413 when more than 100 resources are requested', async () => {
+    const baselines = {};
+    for (let i = 0; i < 101; i++) baselines[`/r/${i}`] = null;
+    expect((await sync({ baselines })).status).toBe(413);
   });
 
-  test('Delta operations are valid JSON Patch (RFC 6902)', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v1' },
-      resources: ['/users'],
-    });
-    const ops = res.body.deltas['/users'].operations;
-    for (const op of ops) {
-      expect(['add', 'remove', 'replace', 'move', 'copy', 'test']).toContain(op.op);
-      expect(typeof op.path).toBe('string');
-    }
+  test('Exactly 100 resources is accepted', async () => {
+    const baselines = {};
+    for (let i = 0; i < 100; i++) baselines[`/r/${i}`] = null;
+    expect((await sync({ baselines })).status).toBe(200);
   });
 
-  test('Applying delta to old state produces correct new state', async () => {
-    const { getVersion, getCurrentVersion } = require('../src/version-store');
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v1' },
-      resources: ['/users'],
-    });
-    const ops = res.body.deltas['/users'].operations;
-    const oldData = getVersion('/users', 'v1').data;
-    const applied = jsonpatch.applyPatch(JSON.parse(JSON.stringify(oldData)), ops).newDocument;
-    const current = getCurrentVersion('/users').data;
-    expect(applied).toEqual(current);
-  });
-
-  test('Empty resources array returns 204', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: {},
-      resources: [],
-    });
-    expect(res.status).toBe(204);
+  test('413 when the declared body exceeds 64 KB', async () => {
+    const res = await rawSync({ body: JSON.stringify({ baselines: { '/users': 'x'.repeat(70000) } }) });
+    expect(res.status).toBe(413);
   });
 });
 
-// ─── Multi-resource ───────────────────────────────────────────────────────────
+// ─── Header-based baselines ──────────────────────────────────────────────────
 
-describe('Multi-resource', () => {
-  test('SYNC with 3 resources returns delta for each independently', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v1', '/posts': 'v1', '/config': 'v1' },
-      resources: ['/users', '/posts', '/config'],
-    });
-    expect(res.status).toBe(200);
-    expect(res.body.deltas).toHaveProperty('/users');
-    expect(res.body.deltas).toHaveProperty('/posts');
-    expect(res.body.deltas).toHaveProperty('/config');
+describe('Sync-Baseline header', () => {
+  test('Header form yields the same results as body form', async () => {
+    const viaBody = await sync({ baselines: { '/users': 'v1', '/posts': 'v1' } });
+    const viaHeader = await rawSync({ headers: { 'Sync-Baseline': '("/users" "v1"), ("/posts" "v1")' } });
+    expect(viaHeader.status).toBe(200);
+    expect(viaHeader.body.results).toEqual(viaBody.body.results);
   });
 
-  test('Resources at current version show empty operations array', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v3', '/posts': 'v1', '/config': 'v1' },
-      resources: ['/users', '/posts', '/config'],
-    });
-    // /users is at current (v3) so has empty ops, but /posts and /config have changes → 200
-    expect(res.status).toBe(200);
-    expect(res.body.deltas['/users'].operations).toEqual([]);
+  test('A single-item inner list means no baseline (snapshot)', async () => {
+    const res = await rawSync({ headers: { 'Sync-Baseline': '("/posts")' } });
+    expect(res.body.results['/posts']).toMatchObject({ status: 200, format: SNAPSHOT, from: null });
   });
 
-  test('Resources behind return correct per-resource delta', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v1', '/posts': 'v1', '/config': 'v1' },
-      resources: ['/users', '/posts', '/config'],
-    });
-    expect(res.body.deltas['/users'].operations.length).toBeGreaterThan(0);
-    expect(res.body.deltas['/posts'].operations.length).toBeGreaterThan(0);
-    expect(res.body.deltas['/config'].operations.length).toBeGreaterThan(0);
+  test('Resource names containing "), (" and quotes survive the header parser', async () => {
+    const res = await rawSync({ headers: { 'Sync-Baseline': '("/a), (\\"b" "v1")' } });
+    expect(res.status).toBe(200);
+    expect(res.body.results['/a), ("b']).toEqual({ status: 404 });
+  });
+
+  test('422 on a malformed header', async () => {
+    expect((await rawSync({ headers: { 'Sync-Baseline': '/users=v1' } })).status).toBe(422);
+  });
+
+  test('Sync-Accept selects the patch format', async () => {
+    const res = await rawSync({ headers: { 'Sync-Baseline': '("/doc" "v1")', 'Sync-Accept': MERGE_PATCH } });
+    expect(res.body.results['/doc'].format).toBe(MERGE_PATCH);
+  });
+});
+
+// ─── Patch formats ───────────────────────────────────────────────────────────
+
+describe('Patch formats', () => {
+  test('Defaults to JSON Patch (RFC 6902)', async () => {
+    const res = await sync({ baselines: { '/doc': 'v1' } });
+    const r = res.body.results['/doc'];
+    expect(r.format).toBe(JSON_PATCH);
+    for (const op of r.data) expect(['add', 'remove', 'replace', 'move', 'copy', 'test']).toContain(op.op);
+  });
+
+  test('Honours JSON Merge Patch (RFC 7396) when requested', async () => {
+    const res = await sync({ baselines: { '/doc': 'v1' }, accept: [MERGE_PATCH] });
+    expect(res.body.results['/doc']).toMatchObject({ format: MERGE_PATCH, data: { title: 'T2', extra: { k: 1 } } });
+  });
+
+  test('Falls back to JSON Patch when a change is inexpressible as merge patch (null member)', async () => {
+    const res = await sync({ baselines: { '/nulls': 'v1' }, accept: [MERGE_PATCH, JSON_PATCH] });
+    expect(res.body.results['/nulls'].format).toBe(JSON_PATCH);
+  });
+
+  test('Sends a snapshot when the patch is not smaller than the resource', async () => {
+    const res = await sync({ baselines: { '/tiny': 'v1' } });
+    expect(res.body.results['/tiny']).toMatchObject({ format: SNAPSHOT, from: 'v1', to: 'v2', data: { a: 2 } });
+  });
+
+  test('Unknown formats are skipped; the snapshot is the guaranteed fallback', async () => {
+    const res = await sync({ baselines: { '/doc': 'v1' }, accept: ['application/x-bsdiff'] });
+    expect(res.body.results['/doc'].format).toBe(SNAPSHOT);
+  });
+
+  test('A null baseline yields a full snapshot', async () => {
+    const res = await sync({ baselines: { '/posts': null } });
+    expect(res.body.results['/posts']).toMatchObject({ status: 200, format: SNAPSHOT, from: null, to: 'v2' });
+  });
+});
+
+// ─── End-to-end correctness ──────────────────────────────────────────────────
+
+describe('Applying results reproduces server state', () => {
+  const cases = [
+    ['/users', 'v1', undefined],
+    ['/doc', 'v1', [MERGE_PATCH]],
+    ['/nulls', 'v1', [MERGE_PATCH, JSON_PATCH]],
+    ['/tiny', 'v1', undefined],
+  ];
+
+  test.each(cases)('%s from %s', async (resource, token, accept) => {
+    const res = await sync({ baselines: { [resource]: token }, ...(accept && { accept }) });
+    const local = getVersion(resource, token).data;
+    const next = applyResult(local, token, res.body.results[resource]);
+    expect(next).toEqual(getCurrentVersion(resource).data);
+  });
+
+  test('applyResult rejects a patch whose baseline is not the one the client holds', async () => {
+    const res = await sync({ baselines: { '/doc': 'v1' } });
+    const stale = getVersion('/doc', 'v2').data;
+    expect(() => applyResult(stale, 'v2', res.body.results['/doc'])).toThrow(/baseline/);
   });
 });
 
 // ─── Headers ─────────────────────────────────────────────────────────────────
 
-describe('Headers', () => {
-  test('Response includes Sync-Server-Version header', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v1' },
-      resources: ['/users'],
-    });
-    expect(res.headers['sync-server-version']).toBeTruthy();
+describe('Response headers', () => {
+  test('Content-Type is application/sync-result+json', async () => {
+    const res = await sync({ baselines: { '/users': 'v1' } });
+    expect(res.headers['content-type']).toContain('application/sync-result+json');
   });
 
-  test('Response Content-Type is application/sync-delta+json', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v1' },
-      resources: ['/users'],
-    });
-    expect(res.headers['content-type']).toContain('application/sync-delta+json');
+  test('Cache-Control: no-store', async () => {
+    const res = await sync({ baselines: { '/users': 'v1' } });
+    expect(res.headers['cache-control']).toBe('no-store');
   });
 
-  test('Response includes Sync-Delta-Complete header', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/users': 'v1' },
-      resources: ['/users'],
-    });
+  test('Sync-Delta-Complete is present', async () => {
+    const res = await sync({ baselines: { '/users': 'v1' } });
     expect(res.headers['sync-delta-complete']).toBe('true');
   });
 });
 
-// ─── Edge Cases ───────────────────────────────────────────────────────────────
+// ─── Compression ─────────────────────────────────────────────────────────────
 
-describe('Edge Cases', () => {
-  test('SYNC to non-existent resource returns 404', async () => {
-    const res = await makeSyncRequest('/api/users', {
-      version_vector: { '/nonexistent': 'v1' },
-      resources: ['/nonexistent'],
-    });
-    expect(res.status).toBe(404);
+describe('Compression', () => {
+  test('Large results are gzipped when the client accepts it', async () => {
+    const res = await sync({ baselines: { '/big': null } }, { 'Accept-Encoding': 'gzip' });
+    expect(res.headers['content-encoding']).toBe('gzip');
+    expect(res.headers['vary']).toMatch(/Accept-Encoding/i);
+    expect(res.body.results['/big'].data[199]).toMatchObject({ id: 199 });
   });
 
-  test('GET to same endpoint still works (SYNC does not replace GET)', async () => {
-    const res = await makeGetRequest('/api/users');
-    expect(res.status).toBe(200);
+  test('Results are not compressed when the client does not accept gzip', async () => {
+    const res = await sync({ baselines: { '/big': null } });
+    expect(res.headers['content-encoding']).toBeUndefined();
+    expect(res.body.results['/big'].status).toBe(200);
   });
 
-  test('POST to same endpoint still works', async () => {
-    const res = await makePostRequest('/api/users', { name: 'Test' });
-    expect(res.status).toBe(201);
+  test('Small results are not compressed even if gzip is accepted', async () => {
+    const res = await sync({ baselines: { '/tiny': 'v1' } }, { 'Accept-Encoding': 'gzip' });
+    expect(res.headers['content-encoding']).toBeUndefined();
+  });
+});
+
+// ─── Coexistence and idempotency ─────────────────────────────────────────────
+
+describe('Coexistence', () => {
+  test('GET to the same endpoint still works', async () => {
+    expect((await plain('GET', '/api/users')).status).toBe(200);
   });
 
-  test('SYNC is idempotent — same request twice returns same response', async () => {
-    const body = { version_vector: { '/users': 'v1' }, resources: ['/users'] };
-    const r1 = await makeSyncRequest('/api/users', body);
-    const r2 = await makeSyncRequest('/api/users', body);
+  test('POST to the same endpoint still works', async () => {
+    expect((await plain('POST', '/api/users', { name: 'Test' })).status).toBe(201);
+  });
+
+  test('SYNC is idempotent: same request twice returns the same results', async () => {
+    const payload = { baselines: { '/users': 'v1', '/doc': 'v1' } };
+    const r1 = await sync(payload);
+    const r2 = await sync(payload);
     expect(r1.status).toBe(r2.status);
-    expect(JSON.stringify(r1.body?.deltas)).toBe(JSON.stringify(r2.body?.deltas));
+    expect(r1.body.results).toEqual(r2.body.results);
   });
 });
